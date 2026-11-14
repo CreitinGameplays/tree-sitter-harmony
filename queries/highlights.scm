@@ -105,13 +105,6 @@
 ; Conversion operator
 "as" @keyword.operator
 
-; Reserved future / v1 spellings in the design document.
-"abilities" @keyword
-"async" @keyword
-"await" @keyword
-"macro" @keyword
-"try" @keyword.control
-
 ; Operators
 "=" @operator
 "+=" @operator
