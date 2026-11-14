@@ -1,0 +1,34 @@
+/// A minimal Harmony smoke test.
+copy struct Point {
+    x: i32;
+    y: i32;
+}
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Dot,
+}
+
+fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+fn main() {
+    let mut p = Point { .x = 10, .y = 20 };
+    let nums = [1, 2, 3];
+
+    if (p.x > 0) {
+        println("hello\\nHarmony");
+    }
+
+    for (i : 0..=2) {
+        p.x += nums[i];
+    }
+
+    switch (Shape::Dot) {
+        case Dot: { println("dot"); }
+        case Circle(r): { println("circle {}", r); }
+        case Rect(w, h): { println("rect {} {}", w, h); }
+    }
+}
