@@ -221,6 +221,14 @@
           "value": "extern"
         },
         {
+          "type": "FIELD",
+          "name": "abi",
+          "content": {
+            "type": "SYMBOL",
+            "name": "string_literal"
+          }
+        },
+        {
           "type": "STRING",
           "value": "fn"
         },

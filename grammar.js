@@ -85,8 +85,11 @@ export default grammar({
       $.block,
     ),
 
+    // A foreign declaration names its ABI: `extern "C" fn name(...) -> T;`.
+    // The ABI string is mandatory (docs/harmony.md 6.8); `"C"` is the only
+    // ABI the compiler implements, but the grammar stays open to more.
     extern_function_declaration: ($) => seq(
-      "extern", "fn", field("name", $.identifier),
+      "extern", field("abi", $.string_literal), "fn", field("name", $.identifier),
       "(", optional($.parameter_list), ")",
       optional(seq("->", field("return_type", $.type))),
       ";",

@@ -50,7 +50,7 @@ File extension: `.harmony`
 |---|---|---|
 | v0.1 | First draft | Ownership core, `life(a)` lifetime syntax, `new`, C-style parens and semicolons. |
 | v0.2 | Rename pass | `impl`→`methods`, `match`→`switch`/`case`, `Option`/`Some`/`None`→`Maybe`/`Has`/`Empty`, `Box`→`Heap`, `for (x in v)`→`for (x : v)`. |
-| v0.3 | Identity pass | New diagnostics format, `String::from`→`.own()`, constructors named `make`, `unchecked("reason")`, `raw` pointers, `extern fn`, `export`/`import`, `cleanup` hook, `eq`/`ord` bounds, `next` iteration protocol, `Outcome`, byte literals, ranges. |
+| v0.3 | Identity pass | New diagnostics format, `String::from`→`.own()`, constructors named `make`, `unchecked("reason")`, `raw` pointers, `extern "C" fn`, `export`/`import`, `cleanup` hook, `eq`/`ord` bounds, `next` iteration protocol, `Outcome`, byte literals, ranges. |
 | v0.3.1 | Decisions + backends | §20.3 open questions resolved (structured reasons, guards, `Shared<T>`, threads incl. detached, `try`, named fields/struct patterns, function pointers, `i32` literals; `unchecked`-as-expression rejected); names kept, trait-like feature renamed **`trait`→`abilities`**, `spawn`/`send` un-reserved; **LLVM is the primary backend**, C11 secondary; the language is named Harmony (`.harmony`). |
 | v0.3.2 | Heap form | The heap keyword `new` (a prefix operator: `new 42`) is replaced by the `sizeof`-styled built-in form **`heap(x)`**. It reads like the allocation it is, cannot be mistaken for a constructor, and lets the compiler construct the value **in place** (`heap([0u8; 8_000_000])`). `new` and `delete` join the recognized foreign words. |
 | v0.3.3 | Split rule | §19.8 makes the compiler-vs-library boundary explicit: the compiler keeps only what soundness or syntax requires (analyses, traps, indexing, `heap(x)`, about a dozen intrinsics). Types, collections, formatting, I/O, the runtime's entry/allocator/trap formatting, protocol implementations, diagnostic wording, and lints all move to the library or tooling. |
@@ -112,7 +112,7 @@ The core ideas (ownership, borrowing, lifetimes, exhaustive sum types) are not n
 - Zero-cost *everything*. Bounds checks and overflow checks exist and are on in all builds.
 - Leak freedom. Memory safety is not leak safety (see §3.4).
 - Concurrency. v0 is single-threaded; v1 adds threads **with detached-thread support** via capability markers that are ordinary names, not reserved keywords (§20.3 item 4, §20.4).
-- Source compatibility with C. It is C-*shaped*, not C-compatible, apart from `extern fn` FFI.
+- Source compatibility with C. It is C-*shaped*, not C-compatible, apart from `extern "C" fn` FFI.
 
 ### 2.3 The feature budget
 
@@ -534,12 +534,14 @@ fn main() {
 ### 6.8 Foreign functions (FFI to C)
 
 ```c
-extern fn abs(x: i32) -> i32;
-extern fn getenv(name: raw u8) -> raw u8;
+extern "C" fn abs(x: i32) -> i32;
+extern "C" fn getenv(name: raw u8) -> raw u8;
 ```
 
+- The **ABI is written down**: `extern` is followed by a string naming the calling convention, then `fn`. `extern fn ...` without the string is a syntax error (`SYN-05`) — the ABI is never an implicit default.
+- The only ABI implemented today is `"C"`. Any other name is a stop (`FFI-01`).
 - Signatures may use only primitives and `raw` pointers (no structs by value in v0).
-- Every call to an `extern fn` requires `unchecked(...)`, because the compiler cannot see across the C boundary.
+- Every call to an `extern "C" fn` requires `unchecked(...)`, because the compiler cannot see across the C boundary.
 
 ---
 
@@ -1252,7 +1254,7 @@ The string is **mandatory**. For a block it is the *justification*. For a functi
 | 1 | Dereference or use a raw pointer | `*p`, `p.read()`, `p.write(v)`, `&*p`, `&mut *p` |
 | 2 | Raw pointer arithmetic | `p.plus(n)`, `p.minus(n)` |
 | 3 | Call an `unchecked fn` | `alloc<T>(n)`, `dealloc(p, n)`, your own |
-| 4 | Call an `extern fn` | `abs(-5)` from C |
+| 4 | Call an `extern "C" fn` | `abs(-5)` from C |
 | 5 | Reinterpret bits | `reinterpret<T, U>(x)` (sizes must match) |
 | 6 | Skip a bounds check | `v.get_unchecked(i)` |
 | 7 | Take ownership from a raw pointer | `Heap::from_raw(p)` |
@@ -2330,7 +2332,7 @@ Why the safe API is safe: `get` returns `Maybe<&T>` with a life tied to `&self`,
 ### 17.9 Calling C
 
 ```c
-extern fn abs(x: i32) -> i32;
+extern "C" fn abs(x: i32) -> i32;
 
 fn main() {
     let mut n = 0;
@@ -2376,7 +2378,7 @@ item          = [ "export" ] ( fn_decl | const_decl | struct_decl | enum_decl )
               | extern_decl ;
 
 const_decl    = "const" ID ":" type "=" expr ";" ;
-extern_decl   = "extern" "fn" ID "(" [ params ] ")" [ "->" type ] ";" ;
+extern_decl   = "extern" STRING "fn" ID "(" [ params ] ")" [ "->" type ] ";" ;
 
 unck_head     = "unchecked" "(" STRING ")" ;
 fn_decl       = [ unck_head ] "fn" ID [ generics ] "(" [ params ] ")" [ "->" type ] block ;
@@ -2555,7 +2557,7 @@ generates `rt.h` for the C backend).
 | drop with a drop flag | `br` on the flag; drop glue call in its own block |
 | `trap(...)` | `call lc_trap(...)`, declared `noreturn` |
 | `unchecked` operation | emitted as the plain IR operation; no extra checks |
-| `extern fn` | a plain C-ABI declaration |
+| `extern "C" fn` | a plain C-ABI declaration |
 
 **Determinism:** IR bytes are a pure function of the input — stable,
 readable symbol names (`module__Type__method`), types emitted in a fixed
@@ -2587,7 +2589,7 @@ Emits C11 from the same mapping semantics; run through the host
 | drop with a drop flag | `if (flag_x) { drop_T(&x); }` |
 | `trap(...)` | `lc_trap(...)` declared `_Noreturn` |
 | `unchecked` operation | emitted as the plain C operation; no extra checks |
-| `extern fn` | a plain C prototype |
+| `extern "C" fn` | a plain C prototype |
 
 Defense in depth: compile the output with `-fwrapv -fno-strict-aliasing -fno-delete-null-pointer-checks -fstack-clash-protection`. The generated code is written so that it does **not** depend on these flags for correctness; they only blunt compiler bugs.
 
@@ -2629,7 +2631,7 @@ flags:  --format=pretty|line|json   --all   --strict   --deny-unchecked
 | M3 | Borrow checker: shared and exclusive loans, liveness-based. |
 | M4 | `life` parameters, elision, structs with references. |
 | M5 | Diagnostics renderer (event log, timeline format), `explain`, migration hints, JSON output. |
-| M6 | `unchecked`, `raw`, `extern fn`, `lc audit`. |
+| M6 | `unchecked`, `raw`, `extern "C" fn`, `lc audit`. |
 | M7 | Standard library polish, **C backend as the cross-check backend** (`emit-c` + differential tests), formatter, fuzzing harness, the beginner's book. |
 
 ### 19.8 The split rule: compiler vs. library
@@ -2669,7 +2671,7 @@ any — the compiler must keep.
 | `swap`, `replace` | Raw read and write inside one tiny `unchecked` block |
 | `assert`, `unreachable`, `exit` | `assert` and `unreachable` call `trap`; `exit` wraps libc's `exit` |
 | `print`, `println`, `eprintln`, `format` | Runtime halves are library code (see §19.8.6) |
-| `sqrt`, `sin`, `pow`, etc. | `extern fn` bindings to libm, with safe wrappers |
+| `sqrt`, `sin`, `pow`, etc. | `extern "C" fn` bindings to libm, with safe wrappers |
 | `min`, `max`, `abs` | Ordinary generic functions |
 
 #### 19.8.3 Methods on built-in types
@@ -2857,7 +2859,7 @@ Three keyword reservations are **dropped**: `spawn`, `send`, and (per the rename
 | `assert(c)` | `assert(c)` | A trap in every build mode. |
 | `exit(1)` | `exit(1)` | Same. |
 | `abort()` / UB | `trap("msg")` | Defined, with a message. |
-| `extern int abs(int);` | `extern fn abs(x: i32) -> i32;` | Calls need `unchecked("...")`. |
+| `extern int abs(int);` | `extern "C" fn abs(x: i32) -> i32;` | Calls need `unchecked("...")`. |
 | "trust me, I'm a programmer" | `unchecked("a real reason") { }` | The compiler wants it in writing. |
 
 ---

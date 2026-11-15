@@ -22,6 +22,9 @@
 (identifier) @variable
 (function_declaration name: (identifier) @function)
 (extern_function_declaration name: (identifier) @function)
+; A foreign declaration's ABI string: `extern "C" fn ...` (6.8). The string is
+; mandatory, so it is always there.
+(extern_function_declaration abi: (string_literal) @string)
 (constant_declaration name: (identifier) @constant)
 (struct_declaration name: (identifier) @type @type.definition)
 (enum_declaration name: (identifier) @type @type.definition)
