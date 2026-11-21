@@ -412,6 +412,7 @@ fn apply(f: fn(i32, i32) -> i32, a: i32, b: i32) -> i32 {
 let f: fn(i32, i32) -> i32 = add;  // annotated
 let g = add;                       // inferred from the function signature
 let sum = apply(add, 20, 22);      // function name as an argument
+let h = math::double;              // an imported function works too
 ```
 
 Function pointer types are **structural**: `fn(i32) -> i32` matches any
