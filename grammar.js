@@ -1,4 +1,4 @@
-// Harmony v0.3.3 Tree-sitter grammar.
+// Harmony v0.3.3 + v1 Tree-sitter grammar.
 // Based on §18 (Formal grammar / EBNF) of the supplied Harmony design document.
 // This is a syntax grammar: ownership, typing, exhaustiveness, and borrow checking
 // remain semantic/compiler analyses and are intentionally not encoded here.
@@ -44,6 +44,11 @@ export default grammar({
     // `case x:` — the identifier can be a binding pattern or the head of a
     // (possibly qualified) variant pattern. Both complete; GLR keeps both.
     [$.binding_pattern, $.path_expression],
+    // `#name(...);` is both a macro statement and a macro expression used as
+    // an expression statement; GLR keeps both and the trailing `;` resolves.
+    [$.macro_statement, $.macro_expression],
+    // A macro argument may be an expression or a type; both start with a path.
+    [$.type_path, $.path_expression],
   ],
 
   rules: {
@@ -57,6 +62,11 @@ export default grammar({
       $.enum_declaration,
       $.methods_block,
       $.extern_function_declaration,
+      // Future (§20.5): scoped AST macros and reserved-for-future words are
+      // parsed so editors can highlight them before the compiler implements
+      // them. They are documented as design-only, not v1 features.
+      $.macro_declaration,
+      $.reserved_keyword,
     ),
 
     exported_item: ($) => seq(
@@ -66,12 +76,25 @@ export default grammar({
         $.constant_declaration,
         $.struct_declaration,
         $.enum_declaration,
+        $.methods_block,
+        $.extern_function_declaration,
+        $.macro_declaration,
       ),
     ),
 
+    // Reserved-for-future words (§4.2). Kept as items so they highlight as
+    // keywords even though no compiler stage accepts them yet.
+    reserved_keyword: ($) => choice("abilities", "async", "await", "macro"),
+
     import_declaration: ($) => seq("import", $.string_literal, ";"),
 
-    unchecked_header: ($) => seq("unchecked", "(", $.string_literal, ")"),
+    // v1: the reason may carry a tag: `unchecked(index_checked, "i < len")`.
+    unchecked_header: ($) => seq(
+      "unchecked", "(",
+      optional(seq(field("tag", $.identifier), ",")),
+      field("reason", $.string_literal),
+      ")",
+    ),
 
     function_declaration: ($) => seq(
       optional($.unchecked_header),
@@ -147,7 +170,15 @@ export default grammar({
 
     enum_variant: ($) => seq(
       field("name", $.identifier),
-      optional(seq("(", commaSep1($.type), ")")),
+      optional(choice(
+        seq("(", commaSep1($.type), ")"),
+        // v1: named payload fields — `Circle { radius: f64 }`.
+        seq("{", commaSep1($.named_payload_field), "}"),
+      )),
+    ),
+
+    named_payload_field: ($) => seq(
+      field("name", $.identifier), ":", field("type", $.type),
     ),
 
     methods_block: ($) => seq(
@@ -156,6 +187,34 @@ export default grammar({
     ),
 
     method_declaration: ($) => seq(optional("export"), $.function_declaration),
+
+    // Future (§20.5): scoped AST macros. Syntax only; no compiler support yet.
+    macro_declaration: ($) => seq(
+      "macro", field("name", $.identifier),
+      "(", optional($.macro_parameter_list), ")",
+      choice(
+        seq("->", "expr", $.block),
+        seq("=", $.expression, ";"),
+        $.block,
+      ),
+    ),
+
+    macro_parameter_list: ($) => commaSep1($.macro_parameter),
+
+    macro_parameter: ($) => seq(
+      field("name", $.identifier), ":",
+      field("kind", $.macro_kind), optional("..."),
+    ),
+
+    macro_kind: ($) => choice("expr", "code", "block", "type", "ident"),
+
+    macro_argument_list: ($) => seq(
+      "(", optional(commaSep1($.macro_argument)), ")",
+    ),
+
+    macro_argument: ($) => seq(
+      choice($.expression, $.type, $.block), optional("..."),
+    ),
 
     // -----------------------------------------------------------------------
     // Types
@@ -207,18 +266,39 @@ export default grammar({
       $.return_statement,
       $.break_statement,
       $.continue_statement,
+      $.macro_statement,
       $.block,
     ),
+
+    // v1: an `else` clause on a simple statement. The final `;` belongs to
+    // the statement, keeping the "every simple statement ends with ;" rule.
+    else_clause: ($) => seq(
+      "else",
+      choice(
+        seq("return", optional($.expression)),
+        "continue",
+        "break",
+        // `else (e) { ... };` binds the failure payload.
+        prec.dynamic(1, seq("(", field("binding", $.identifier), ")", $.block)),
+        $.block,
+        // `else trap("...");` — a diverging call. Restricted to a direct call
+        // so `else (e) { ... };` is not confused with a parenthesized expr.
+        seq($.path_expression, $.argument_list),
+      ),
+    ),
+
+    macro_statement: ($) => seq("#", $.path_expression, $.macro_argument_list, ";"),
 
     let_statement: ($) => seq(
       "let", optional("mut"),
       field("name", choice($.identifier, "_")),
       optional(seq(":", field("type", $.type))),
       optional(seq("=", field("value", $.expression))),
+      optional($.else_clause),
       ";",
     ),
 
-    assignment_statement: ($) => seq($.assignment_core, ";"),
+    assignment_statement: ($) => seq($.assignment_core, optional($.else_clause), ";"),
 
     assignment_core: ($) => seq(
       field("left", $.lvalue),
@@ -237,7 +317,7 @@ export default grammar({
       seq("*", $.expression),
     ),
 
-    expression_statement: ($) => seq($.expression, ";"),
+    expression_statement: ($) => seq($.expression, optional($.else_clause), ";"),
 
     if_statement: ($) => seq(
       "if", "(", $.expression, ")", $.block,
@@ -264,6 +344,8 @@ export default grammar({
         seq("case", $.case_pattern_list),
         "default",
       ),
+      // v1: guarded arms — `case Has(x) if (x > 3): { ... }`.
+      optional(seq("if", "(", $.expression, ")")),
       ":", $.block,
     ),
 
@@ -273,11 +355,12 @@ export default grammar({
       $.wildcard_pattern,
       // Higher dynamic precedence: for a bare `case x:` the reference parser
       // binds the identifier (§8.6: "an identifier (binds)"); the variant
-      // reading only wins when it is followed by `(...)` or a `::` path.
+      // reading only wins when it is followed by `(...)`, `{...}` or a `::` path.
       prec.dynamic(1, $.binding_pattern),
       $.literal_pattern,
       $.range_pattern,
       $.variant_pattern,
+      $.struct_pattern,
     ),
 
     wildcard_pattern: ($) => "_",
@@ -291,6 +374,20 @@ export default grammar({
     variant_pattern: ($) => seq(
       field("name", $.path_expression),
       optional(seq("(", commaSep1($.pattern), ")")),
+    ),
+
+    // v1: named-field patterns for structs and enum payloads.
+    // `case Point { x: 0, y: y }:` / `case Circle { radius: r }:`
+    // A bare field name is shorthand for binding it (`Point { x, y }`).
+    struct_pattern: ($) => seq(
+      field("name", $.path_expression),
+      "{", commaSep1($.field_pattern), "}",
+    ),
+
+    field_pattern: ($) => seq(
+      optional("."),
+      field("name", $.identifier),
+      optional(seq(":", $.pattern)),
     ),
 
     unchecked_statement: ($) => seq($.unchecked_header, $.block),
@@ -399,6 +496,8 @@ export default grammar({
       $.sizeof_expression,
       $.heap_expression,
       $.raw_expression,
+      // Future (§20.5): `#name(...)` expression macro invocation.
+      $.macro_expression,
     ),
 
     parenthesized_expression: ($) => seq("(", $.expression, ")"),
@@ -427,6 +526,8 @@ export default grammar({
     heap_expression: ($) => seq("heap", "(", $.expression, ")"),
 
     raw_expression: ($) => seq("raw", "(", $.expression, ")"),
+
+    macro_expression: ($) => seq("#", $.path_expression, $.macro_argument_list),
 
     literal: ($) => choice(
       $.float_literal,

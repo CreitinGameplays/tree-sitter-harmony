@@ -54,6 +54,15 @@ File extension: `.harmony`
 | v0.3.1 | Decisions + backends | §20.3 open questions resolved (structured reasons, guards, `Shared<T>`, threads incl. detached, `try`, named fields/struct patterns, function pointers, `i32` literals; `unchecked`-as-expression rejected); names kept, trait-like feature renamed **`trait`→`abilities`**, `spawn`/`send` un-reserved; **LLVM is the primary backend**, C11 secondary; the language is named Harmony (`.harmony`). |
 | v0.3.2 | Heap form | The heap keyword `new` (a prefix operator: `new 42`) is replaced by the `sizeof`-styled built-in form **`heap(x)`**. It reads like the allocation it is, cannot be mistaken for a constructor, and lets the compiler construct the value **in place** (`heap([0u8; 8_000_000])`). `new` and `delete` join the recognized foreign words. |
 | v0.3.3 | Split rule | §19.8 makes the compiler-vs-library boundary explicit: the compiler keeps only what soundness or syntax requires (analyses, traps, indexing, `heap(x)`, about a dozen intrinsics). Types, collections, formatting, I/O, the runtime's entry/allocator/trap formatting, protocol implementations, diagnostic wording, and lints all move to the library or tooling. |
+| impl | M1 in harmony-base | The bootstrap compiler now **runs the language**: lexer → parser → type checker → LLVM IR text → clang + freestanding runtime → executable. Checked arithmetic (T-OVERFLOW), division/shift traps (T-DIV0, T-SHIFT), bounds-checked indexing (T-INDEX), `heap(x)` allocation, structs/enums by value (sret), methods with `Type__method` mangling, `switch` on scalars and enums, and references all work under `run` with trap status 70 (§14.3). `emit-llvm` output is byte-deterministic. |
+| impl (rewrite) | R7 driver and self-host | `build/harmony` is built by harmony-base, then rebuilt by itself so every canonical stage uses the same native backend schedule. Stage 2 and stage 3 are byte-identical to stage 1. `build`/`run`/`check`/`emit-llvm`/`explain`/`audit` have a differential smoke gate. |
+| impl (rewrite) | R8 native LLVM-C backend | `build`/`run` now link against `libLLVM` directly through `extern "C"` bindings (`library/std/llvm.hr`) and emit objects in parallel without spawning clang. `--backend=clang` keeps the old text/IR path for debugging, and `emit-llvm` is unchanged. |
+| impl (rewrite) | v1 batch 1 | The final compiler accepts structured `unchecked(tag, "reason")` forms, guarded `switch` arms, and `Shared<T>`/`Weak<T>` from `library/std/shared.hr`. Audit reports tags; guards see bindings; shared ownership uses a control block with explicit `release` and `Maybe`-returning `upgrade`. These forms are final-language only; harmony-base stays v0. |
+| impl (rewrite) | v1 threads | `library/std/thread.hr` adds joined and detached threads over raw `clone(2)` + futex hooks in `library/runtime/rt.c`. The `Share<T>` capability marker mints an opaque `ThreadArg` that `spawn` requires; `fnptr(f)` is the small final-only intrinsic for a function address. All three v1 gates pass; harmony-base stays v0. |
+| impl (rewrite) | v1 `else` clause | The final compiler accepts `let x = f() else return;`, `else (e) { ... };`, `else continue;`, `else break;` and `else trap(...);` on `let`, plain `=` assignment, and expression statements. `try` is not a keyword; the success payload binds the target, `else return` forwards `Bad(e)`/`Empty`, and FLOW-01/02/03 reject fallthrough, mismatched errors, and impossible forwarding. These forms are final-language only; harmony-base stays v0. |
+| impl (rewrite) | v1 patterns | The final compiler accepts named enum payload fields (`Variant { name: Type }`), named construction (`Enum::Variant { .name = value }`, positional still works), and struct patterns in `switch` (`case Point { x: 0, y: y }:`) with literal tests, bindings, qualified names and guards. Unknown fields are `TYPE-02`; a struct pattern on a non-struct/enum subject is `TYPE-01`. |
+| design (future) | §20.5 scoped AST macros | Documented the intended v2 macro system: expansion at stage 3.5, `#name(...)` calls, `expr`/`code`/`block`/`type`/`ident` parameter kinds, hygienic scopes, scoped `return`, variadic packs, `MACRO-01..04`, and the grammar extension. **Design only — no implementation, not in v1.** |
+| impl (rewrite) | R6 LLVM backend | The self-hosted compiler now has its own LLVM IR emitter (`harmony/codegen/llvm/`). On all 95 programs in the codegen corpus, its IR is **byte-identical** to harmony-base's, including checked arithmetic, traps, slices, aggregates, generics, methods, enums, switches, formatting calls, and multi-module programs. |
 
 ### 1.2 Bug fixed in v0.3
 
@@ -152,7 +161,7 @@ ordinary library code begins is spelled out in the **split rule** (§19.8).
 
 - No null. Absence is `Maybe<T>`.
 - No reads of uninitialized variables (definite-initialization analysis).
-- Array, slice, `Vec`, and `str` indexing are bounds-checked.
+- Array, slice, and `Vec` indexing are bounds-checked (`str` is reached through `s.as_bytes()[i]` or a `&s[lo..hi]` range, also checked).
 - Integer overflow, divide-by-zero, and over-wide shifts **trap** in every build mode.
 - No pointer arithmetic, no raw pointers, no unions, no implicit casts, **outside `unchecked`**.
 - Borrows are liveness-based (non-lexical): a borrow ends at its **last use**, not at the `}`.
@@ -203,17 +212,17 @@ ordinary library code begins is spelled out in the **split rule** (§19.8).
 | Control flow | `if` `else` `while` `for` `switch` `case` `default` `return` `break` `continue` |
 | Memory and safety | `unchecked` `raw` `self` |
 | Literals and operators | `true` `false` `as` `sizeof` `heap` |
-| **Contextual** (keyword only in the positions listed) | `life` — only in generic lists (`<life a>`) and in types (`&life(a) T`, `Words<life(a)>`) |
+| **Contextual** (keyword only in the positions listed) | `life` — only in generic lists (`<life a>`) and in types (`&life(a) T`, `Words<life(a)>`); `expr` `code` `block` `type` `ident` — only as macro parameter kinds (§20.5) |
 
-`life` is **contextual**, so `player.life -= 1;` still compiles. (A game developer's most-typed identifier survives.)
+`life` is **contextual**, so `player.life -= 1;` still compiles. (A game developer's most-typed identifier survives.) The five macro parameter-kind words are contextual too: they are ordinary identifiers everywhere except after the `:` in a macro parameter list.
 
-**Reserved for the future:** `abilities` `async` `await` `macro` `try`.
+**Reserved for the future:** `abilities` `async` `await` `macro`. (`try` was dropped from the list in v1: early exit is an `else` clause, not a keyword — §20.3 item 5. `macro` stays reserved for the scoped AST macro design in §20.5, which is **not** in v1.)
 (`trait` is **not** reserved — the v1 trait-like feature is spelled
 `abilities`, see §20.4. `spawn` and `send` are deliberately **not** reserved
 either — v1 concurrency will use ordinary method-style names, not keywords;
 see §20.4.)
 
-**Recognized foreign words** (not keywords, but the compiler knows them and gives a translation hint instead of a bare "unknown name"; see `NAME-02` in §16): `unsafe` `impl` `match` `trait` `pub` `use` `loop` `goto` `null` `NULL` `nullptr` `malloc` `free` `new` `delete` `Box` `Option` `Some` `None` `Result` `Ok` `Err` `panic`.
+**Recognized foreign words** (not keywords, but the compiler knows them and gives a translation hint instead of a bare "unknown name"; see `NAME-02` in §16): `unsafe` `impl` `match` `trait` `pub` `use` `loop` `goto` `null` `NULL` `nullptr` `malloc` `free` `new` `delete` `Box` `Option` `Some` `None` `Result` `Ok` `Err` `panic`, plus the preprocessor/macro spellings `define` (as `#define`) and `macro_rules` (as `macro_rules!`) — §16.11, §20.5.
 
 ### 4.3 Literals
 
@@ -236,6 +245,7 @@ Because lifetimes use `life(...)` rather than a tick, **a `'` is always a char l
 - Struct initializer fields are separated by `,` (trailing comma allowed).
 - `switch` cases are `case P: { ... }` with no separator.
 - `*` means multiplication in infix position and dereference in prefix position. `&` means bitwise-and in infix position and borrow in prefix position. The parser decides by position, as in C.
+- `#` is reserved as the macro-invocation prefix (§20.5); `...` is reserved for variadic packs and spreads (§20.5). Neither is a token in v0 — a program using them is a syntax stop until macros land.
 
 
 ---
@@ -257,7 +267,7 @@ A function with no `->` returns nothing. There are no tuples; return a small `st
 
 ### 5.2 Compound and unsized types
 
-- **Arrays:** `[T; N]` with `N` a constant expression. Literal `[1, 2, 3]`, repeat form `[0; 16]`. Arrays live inline (on the stack or inside their owner) and are bounds-checked on every index.
+- **Arrays:** `[T; N]` with `N` a constant expression. Literal `[1, 2, 3]`, repeat form `[0; 16]`. Arrays live inline (on the stack or inside their owner) and are bounds-checked on every index. A large repeat init (`[0u8; 1 << 20]`) lowers to a runtime fill loop, not one store per element, so a big buffer stays a constant amount of emitted code.
 - **Slices:** `[T]` is unsized and only appears behind a reference: `&[T]`, `&mut [T]`. A slice reference is a (pointer, length) pair. Make one with `&a[1..3]` or `&v[..]`.
 - **`str`:** UTF-8 text, unsized, only behind a reference: `&str`. You cannot index a `str` by integer (`s[3]` is a type error, because "the 3rd what?"). Use `s.as_bytes()`, `s.chars()`, or slice by byte range, `&s[lo..hi]`, which **traps** if either end is not on a character boundary.
 - **Structs and enums:** user-defined (see §6). No unions.
@@ -501,6 +511,8 @@ Rules:
 
 - `methods Type { ... }` may appear several times per type, in the same module as the type.
 - Generic form: `methods<T> Stack<T> { ... }`; with lives: `methods<life a> Words<life(a)> { ... }`.
+- A methods block may also name one instantiation: `methods Box<u8> { ... }`. Its methods exist only on `Box<u8>` — calling one on a `Box<i32>` is a type error, not a coercion.
+- When several blocks declare the same method name on one generic type, a nested receiver pattern is more specific: `methods<T> Box<Box<T>> { fn get }` wins for a `Box<Box<i32>>` receiver over `methods<T> Box<T> { fn get }`.
 - **Method call resolution** for `x.m(...)`: (1) look up `m` on the type of `x`, auto-dereferencing through `&`, `&mut`, and `Heap`; (2) auto-borrow to match the method's `self` form. `&self` borrows shared, `&mut self` requires `x` to be a mutable place (`let mut`, or already a `&mut`), and plain `self` moves (or copies, for `copy` types).
 - The special method **`cleanup(&mut self)`** is the destructor hook (§12.6). The special method **`next(&mut self) -> Maybe<T>`** makes a type iterable by `for` (§8.5).
 
@@ -529,7 +541,22 @@ fn main() {
 
 - Items are private unless marked `export`.
 - `import "path";` makes the file's exported items available under the file's base name as a namespace.
+- The path resolves relative to the importing file. `.` and `..` segments are
+  normalized, so the same file always has one identity: two importers that
+  spell the path differently (`"lib/shared.harmony"` and
+  `"lib/nested/../shared.harmony"`) share **one** module, merged once.
 - Import cycles are an error. The standard library is in the implicit prelude plus a handful of importable modules (`import "std/io.src";`).
+
+*harmony-base (bootstrap) implements this as an eager merge:* every module is
+loaded depth-first (each merged once, in source order), imported items are
+renamed `modname::name` (binding exactly like a flattened enum path), and the
+whole program is checked and emitted as one flat module — deterministic, so
+`import`ed and single-file programs compile to the same-shaped IR. A module's
+private helpers merge under its namespace too (bootstrap simplification: the
+final compiler's loader enforces `export` visibility properly); a library
+`main` merges as `modname::main` and the root file's `main` remains the entry
+point. Missing imports and cycles are `NAME-04`. The module's identity is its
+*normalized* path, so one file reached by two spellings is merged once.
 
 ### 6.8 Foreign functions (FFI to C)
 
@@ -538,10 +565,37 @@ extern "C" fn abs(x: i32) -> i32;
 extern "C" fn getenv(name: raw u8) -> raw u8;
 ```
 
-- The **ABI is written down**: `extern` is followed by a string naming the calling convention, then `fn`. `extern fn ...` without the string is a syntax error (`SYN-05`) — the ABI is never an implicit default.
-- The only ABI implemented today is `"C"`. Any other name is a stop (`FFI-01`).
+- The **ABI is written down**: `extern` is followed by a string naming the
+  calling convention, then `fn`. `extern fn ...` without the string is a
+  syntax error (`SYN-05`) — the ABI is never an implicit default.
+- The only ABI implemented today is `"C"`. Any other name is a stop
+  (`FFI-01`), because the emitted `declare` uses the C convention and the
+  compiler cannot keep a promise it does not implement.
 - Signatures may use only primitives and `raw` pointers (no structs by value in v0).
 - Every call to an `extern "C" fn` requires `unchecked(...)`, because the compiler cannot see across the C boundary.
+
+Why the restriction matters (and why the checker enforces it, `TYPE-02`): the
+backend assumes one C ABI for the whole program, and several harmony types do
+not match it at the boundary.
+- A **struct or enum by value** uses a different ABI: harmony returns every
+  aggregate through an `sret` hidden pointer, while C returns small (≤ 16 byte)
+  values in registers. The mismatch links and then silently returns wrong data.
+- A **fat reference** (`&str`, `&[T]`) is a (pointer, length) pair in harmony,
+  but a C parameter is one word, so the length is lost.
+- A **`Heap<T>`** is an owned box the C side cannot know about (and passing it
+  would move ownership across an opaque boundary).
+
+The supported shapes cover the OS surface a freestanding program needs: scalars,
+`raw T` / `raw mut T` (including `raw mut Struct` as an out-parameter, which is
+how POSIX exposes `timeval`, `stat`, and friends), and a `()` (C `void`) return.
+
+The ABI string is also carried into the emitted IR, so a reader of the `.ll`
+sees which convention the foreign symbol uses:
+
+```llvm
+; extern "C" abs
+declare i32 @abs(i32)
+```
 
 ---
 
@@ -740,7 +794,7 @@ switch (code) {
 1. **Exhaustive.** Every possible value must be handled. Enums: every variant (or `default`). Integers, `char`, `&str`: a `default` is required unless every value is listed. Missing a case is `CASE-01`.
 2. **No fallthrough.** Each arm is a braced block. After it, control leaves the `switch`.
 3. **`break` leaves the enclosing loop**, not the `switch`. Outside any loop, `break` in a `switch` is an error.
-4. **Pattern kinds:** `_` (anything, binds nothing), an identifier (binds), a literal, a range `a..=b`, a variant with sub-patterns `Variant(p1, p2)`, and or-patterns `p1 | p2` (each alternative must bind the same names). There are no guards in v0 (use an `if` inside the arm).
+4. **Pattern kinds:** `_` (anything, binds nothing), an identifier (binds), a literal, a range `a..=b`, a variant with sub-patterns `Variant(p1, p2)`, and or-patterns `p1 | p2` (each alternative must bind the same names). There are no guards in v0 (use an `if` inside the arm). In v1, named-field patterns `Variant { field: pattern, ... }` and struct patterns `Point { x: 0, y: y }` are also accepted (§20.3 item 6).
 5. **Binding modes**
    - Switching on an **owned** value: bindings take their payloads **by move** (or copy, if the payload is `copy`). Add `mut` to make a binding mutable: `case Has(mut node):`.
    - Switching on a **`&` / `&mut` reference**: bindings are **references** to the parts. (Matching on a reference gives you references to the pieces.)
@@ -1158,7 +1212,7 @@ an owned `Heap<T>` whose pointee is a moved copy of `x`'s value — so the
 optimization is never visible, only faster.
 
 - `Heap<T>` is **not** `copy`; moving it moves ownership of the allocation (just a pointer copy at runtime).
-- `*h` dereferences. `.` auto-dereferences through `Heap`, `&`, and `&mut`, so there is no `->` anywhere.
+- `*h` dereferences. `.` auto-dereferences through `Heap`, `&`, and `&mut`, so there is no `->` anywhere. The same auto-deref applies to indexing (`h[i]`), slicing (`&h[a..b]`), and `.len()`, so a `Heap<[T; N]>` is used exactly like the array it points at; write `*h` only when you want the array value itself.
 - `Maybe<Heap<T>>` compiles to a single nullable pointer in the backends, so a linked-list link costs one word.
 - A failed allocation is `T-OOM`, a trap, never undefined behavior.
 
@@ -1289,6 +1343,8 @@ It does not turn off type checking, move checking, borrow checking of ordinary r
 | `p.read() -> T` (moves a value out, leaving the slot logically empty) | yes |
 | `p.write(v: T)` (moves a value in without dropping what was there) | yes |
 | `p.plus(n: usize)`, `p.minus(n: usize)` | yes |
+| `p[i]` (index through a raw pointer; `p[i] = v` needs `raw mut T`) | yes |
+| `p as <integer>`, `<integer> as raw T` | yes |
 | `alloc<T>(n: usize) -> raw mut T` (uninitialized room for `n` Ts) | yes |
 | `dealloc<T>(p: raw mut T, n: usize)` | yes |
 | `reinterpret<T, U>(x: T) -> U` | yes |
@@ -1325,6 +1381,24 @@ unchecked audit · 4 sites · 11 lines total
 
 `lc audit --json` is intended for CI: fail the build if the site count in application code increases without review.
 
+*harmony-base (M1) implements this listing with an ASCII separator (`-`
+instead of `·`) and no surrounding quotes, so it stays grep-friendly and
+byte-stable:*
+
+```
+$ harmony-base audit src/mini_vec.src
+unchecked audit - 4 sites - 11 lines total
+
+  src/mini_vec.src:21   block   grow() guarantees cap > len, so slot len is inside our allocation
+  src/mini_vec.src:44   block   i < len was checked above and slots 0..len are initialized
+
+  0 sites under 12 characters - 0 sites over 10 lines
+```
+
+`harmony-base audit --format=json` prints one object for the whole file
+(`file`, `sites[]`, `total`, `lines`, `short`, `oversized`). An `unchecked fn`
+appears as a `fn` site at its declaration line (its contract is the reason).
+
 ---
 
 ## 14. Runtime traps and error values
@@ -1335,13 +1409,19 @@ A **trap** is a controlled, immediate stop with a message, used when a bug is de
 
 | Code | Trigger |
 |---|---|
-| `T-INDEX` | index out of range on array, slice, `Vec`, or `str` |
+| `T-INDEX` | index out of range on array, slice, `Vec`, or `s.as_bytes()[i]` |
 | `T-SLICE` | bad slice range, or `str` slice not on a character boundary |
 | `T-OVERFLOW` | integer overflow in `+ - * neg` |
 | `T-DIV0` | division or remainder by zero, or `MIN / -1` |
 | `T-SHIFT` | shift by a negative or too-wide amount |
 | `T-OOM` | allocation failed |
 | `T-STACK` | stack exhausted (guard page hit) |
+
+Any other invalid memory access is a violated `unchecked` contract (§13.6),
+not a trap: the runtime does not dress it up as one. The stack guard only
+reports `T-STACK` when the fault address is in the guard page under the stack;
+anything else re-raises the signal, so the process dies with a real `SIGSEGV`
+and the driver reports the signal number.
 | `T-ASSERT` | `assert(cond)` / `assert(cond, "msg")` failed |
 | `T-EXPECT` | `.or_trap("msg")` on `Empty` / `Bad` |
 | `T-USER` | explicit `trap("msg")` |
@@ -1399,7 +1479,7 @@ fn parse_u8(text: &str) -> Outcome<u8, ParseError> {
 }
 ```
 
-There is no `?` operator in v0. Errors are handled with `switch`, which keeps control flow visible. (A `try` statement **is decided for v1** — `let x = try parse(s);` returns early on `Bad`; the word is reserved for it, see §20.3 item 5.)
+There is no `?` operator in v0. Errors are handled with `switch`, which keeps control flow visible. *Implemented in the final compiler for v1 (§20.3 item 5):* an `else` clause on `let`, plain `=` assignment, and expression statements. `let n = parse_u8(text) else return;` binds the `Good` payload to `n` and forwards `Bad(e)` from an `Outcome`-returning function (or `Empty` from a `Maybe`-returning one). `let n = parse(s) else (e) { return Bad(AppError::Parse(e)); };` converts the error in an explicit block. The clause must not fall through: `return`, `break`, `continue`, `trap(...)` and `exit(...)` are legal exits (FLOW-01). Forwarding needs the same shape and error type (FLOW-02/03). The clause ends with `;`, keeping the "every simple statement ends with `;`" rule. `try` is **not** a keyword in the final design.
 
 ---
 
@@ -1900,6 +1980,13 @@ BUILD OK        0 stops · 2 warns · 1 hint      → ./main
 | 2 | Usage or I/O error (bad flag, missing file). |
 | 70 | (Compiled **program**, not `lc`) the program trapped (§14). |
 
+Under `run`, the compiled program's exit status is forwarded as `main`'s
+return value modulo 256, so any value in 0–255 is a normal result — `139` can
+mean "returned 139". A program that dies from a signal (a violated `unchecked`
+contract, an abort) is therefore reported explicitly by the driver as
+`harmony-base: the compiled program was killed by signal N`, and the forwarded
+status keeps the shell convention (128 + signal).
+
 ### 16.7 Machine-readable formats
 
 **`--format=line`** is one grep-friendly line per diagnostic (for editors, CI logs):
@@ -1986,6 +2073,15 @@ SEE    Language guide § Ownership and moves
 | `TYPE-05` | stop | invalid `copy` marking | `copy struct` with a `String` field | drop `copy`, or change the field |
 | `TYPE-06` | stop | bound not satisfied | `<` on a `T` without `ord` | add the bound |
 | `FMT-01` | stop | format string mismatch | `println("{} {}", x)` | match arguments to `{}` |
+| `FFI-01` | stop | unknown ABI | `extern "Win64" fn ...` | use the C ABI: `extern "C" fn ...` |
+| `CONST-01` | stop | not a compile-time constant | `const A: i32 = compute();` | use a literal, another constant, or a `let` |
+| `FLOW-01` | stop | `else` clause falls through | `let x = f() else (e) { };` | end every path with `return`/`break`/`continue`/`trap(...)`/`exit(...)` |
+| `FLOW-02` | stop | cannot forward this failure | `Outcome<E>` into a function returning `Outcome<F>` | convert with an explicit block |
+| `FLOW-03` | stop | no return type can carry the failure | `else return;` in a function returning `i32` | use an explicit `trap`/`exit` block |
+| `MACRO-01` | stop | wrong macro argument count or kind | `{ ... }` passed to `expr`, `a + 1` passed to `ident` | show the parameter kind and the call site (§20.5) |
+| `MACRO-02` | stop | macro form/position mismatch | statement macro in expression position, or a missing `return` in `-> expr` | add `-> expr`, use `return`, or call as `#name(...);` |
+| `MACRO-03` | stop | expansion depth exceeded (64) | recursive macro cycle | break the cycle |
+| `MACRO-04` | stop | invalid pack spread or loop exit | `pack...` outside a call, `break` in an unrolled pack loop | use `for (x : pack)` or `return` |
 | `MUT-01` | stop | assigning to a read-only binding | `let x = 1; x = 2;` | `let mut` |
 | `MUT-02` | warn | `let mut` never changed | unused `mut` | remove `mut` |
 | `MUT-03` | stop | `&mut` of a read-only binding | `&mut x` where `x` isn't `mut` | `let mut` |
@@ -2034,6 +2130,8 @@ When the compiler sees a word from C, C++, Rust, Java, or Go that means somethin
 | `Box<T>`, `Box::new(x)` | `Heap<T>`, `heap(x)` |
 | `malloc(...)` / `free(p)` | `heap(x)` / nothing: freed at `}` |
 | `new X`, `delete p` | `heap(x)` / nothing: freed at `}` (a `NAME-02` hint, not an error) |
+| `#define N 8` | `const N: usize = 8;` (or `macro` for code, §20.5) |
+| `macro_rules! name { ... }` | `macro name(...) { ... }` (§20.5; `macro` is reserved, not a v1 feature) |
 | `panic!("msg")`, `abort()` | `trap("msg")` |
 | `.unwrap()` | `.or_trap("msg")` |
 | `String::from("x")`, `.to_string()` | `"x".own()` |
@@ -2491,6 +2589,14 @@ literal       = INT | FLOAT | CHAR | BYTE | STRING | "true" | "false" ;
 
 **Checked after parsing (not expressed in the grammar):** `copy` marking validity; `self` only as first parameter of a method; `break` only inside a loop; `..=` requires an end; or-pattern alternatives bind identical names; reason-string length; slices and `str` only behind references.
 
+**Generic-call inference.** When a call to a generic function omits
+`generic_args`, the checker infers each type parameter from the argument types:
+`id(7)` becomes `id<i32>(7)`, and `max(a, b)` pins `T` from `a` and requires
+`b` to agree. An untyped integer/float literal first adopts its default
+(`i32`/`f64`) before inference. A parameter that no argument mentions cannot be
+inferred, which is a `TYPE-01` stop asking for the explicit arguments. An
+explicit `generic_args` list always wins and is checked as before.
+
 ---
 
 ## 19. Compiler architecture and the backends
@@ -2502,6 +2608,7 @@ literal       = INT | FLOAT | CHAR | BYTE | STRING | "true" | "false" ;
 | 1 | Lexer | tokens | Contextual `life`; byte/char literals; nestable block comments. |
 | 2 | Parser | AST | Recursive descent, one extra lookahead (§18). Recovers at `;` and `}` to report several syntax errors. |
 | 3 | Module loader and name resolution | resolved AST | Handles `import`/`export`; detects cycles; emits `NAME-xx`, including migration hints. |
+| 3.5 | **Macro expansion** (future, §20.5) | expanded resolved AST | Scoped AST macros only: expand `#name(...)` after resolution but before checking, with hygienic scopes and provenance for caller-origin `return`/`break`/`continue`. Not in v1. |
 | 4 | Type checker | typed AST | Local inference, bounds (`copy`/`eq`/`ord`), conversion rules, format-string checking, `unchecked` gating. |
 | 5 | Lowering | CFG IR | Basic blocks; explicit places; moves, copies, borrows, and scope ends as instructions. |
 | 6 | Flow analyses | facts and **events** | Definite init, move analysis, liveness, loan analysis, life inference, exhaustiveness. |
@@ -2536,7 +2643,9 @@ Every analysis records **events** with provenance as it works: `born(place, span
 
 The primary backend emits **LLVM IR text** (`.ll`), assembled by the system
 toolchain. The runtime is linked in as `rt.bc` (built from the same source that
-generates `rt.h` for the C backend).
+generates `rt.h` for the C backend). `build`/`run` hand the IR to clang on
+stdin (`clang -x ir - …`), so no `.ll` file hits the disk by default;
+`emit-llvm` still prints the deterministic IR text to stdout.
 
 | Source construct | Emitted LLVM IR |
 |---|---|
@@ -2546,7 +2655,7 @@ generates `rt.h` for the C backend).
 | `&T`, `&mut T` | `T*`, `noalias` + (for `&mut`) `nocapture` where the signature proves it; never null by construction |
 | `&[T]`, `&str` | `{ T*, i64 }` (pointer + length) |
 | `[T; N]` | `[N x T]` (copies by value) |
-| `struct` / `enum` | named `%struct` types; enums are `{ i32 tag, [payload] }` with the payload unioned as a fields-of-max-size struct (no `undefined` type-punning; the tag picks the interpretation) |
+| `struct` / `enum` | named `%struct` types; an enum is `{ i32 tag, [4 x i8], [payload x i8] }` — the 8-byte tag region puts the payload at byte offset 8, matching `ty_size` (the tag picks the interpretation) |
 | `Heap<T>` | the library `Heap` struct is `{ ptr }`; `heap(x)` = `T*` from `lc_alloc(sizeof(T))` (constructed in place when `x` is a literal); freed by drop glue |
 | `Maybe<Heap<T>>`, `Maybe<&T>` | a bare pointer, `null` = `Empty` (niche optimization) |
 | `a[i]` | `call lc_check_index(i, N, loc)` before the GEP; direct GEP in `unchecked` |
@@ -2556,6 +2665,8 @@ generates `rt.h` for the C backend).
 | move | `memcpy`-classed register/value handling; the source is dead, no code needed |
 | drop with a drop flag | `br` on the flag; drop glue call in its own block |
 | `trap(...)` | `call lc_trap(...)`, declared `noreturn` |
+| `trap`/`assert`/`unreachable`/`exit` | `lc_trap_msg`/`lc_assert`/`lc_unreachable`/`lc_exit` calls; the stopping three end the block with `unreachable` (a `never`-typed tail satisfies the missing-return check) |
+| `print`/`println`/`eprintln` | the compiler parses the format (`FMT-01`) and emits a run of `lc_put_*` calls (literal text, `lc_put_i64`/`lc_put_f64`/… with width/precision); `eprintln` selects fd 2 |
 | `unchecked` operation | emitted as the plain IR operation; no extra checks |
 | `extern "C" fn` | a plain C-ABI declaration |
 
@@ -2564,6 +2675,44 @@ readable symbol names (`module__Type__method`), types emitted in a fixed
 order, explicit (non-numerical) block labels, no hashes, no timestamps,
 no build paths. The same input compiles to identical `.ll` bytes
 (two runs diff clean).
+
+**Self-hosted implementation:** the rewrite's primary backend lives in
+`harmony/codegen/llvm/`: `context.hr` owns the deterministic emitter state,
+`llx.hr` lowers expressions and statements, and `emit.hr` drives module
+and function emission. Its IR is byte-identical to the bootstrap backend's
+on the full codegen corpus, including multi-module programs;
+`tests/harmony-final/irdiff.py` is the differential gate.
+
+**Deterministic multi-core lowering and code generation.** `emit.hr` first
+fixes the sequential function order (free functions, non-generic methods,
+then generic instances). It then forks workers over contiguous slices of
+that order; each worker inherits the checked program through copy-on-write
+and writes its IR chunk to a private `/tmp` file. The parent joins in spawn
+order and concatenates the chunks, so PIDs, scheduling, and the worker count
+never appear in the emitted IR. For large `build`/`run` jobs each chunk is
+also made self-contained (shared preamble plus declarations of sibling
+symbols). The default backend parses each chunk with the LLVM C API, runs
+`default<O2>` and emits an object entirely in-process; a forked worker owns
+each libLLVM instance. Objects are linked with `ld` directly, using the host
+crt/libc paths discovered by LLD itself from the host filesystem. No `.ll`
+file and no external tool (clang, ld, or a generated link script) is used for
+the default path; a self rebuild executes no child process at all.
+`--backend=clang` keeps
+the previous clang text path for debugging, and `emit-llvm` always prints the
+unchanged byte-deterministic IR. Small programs take the single-process path.
+The default worker count is three per CPU in the process's affinity mask
+(`sched_getaffinity(2)`), capped at 32 workers; `--jobs=1`/`--sequential`
+force one worker. Type checking and monomorphization stay sequential because
+they share one type table whose ids and first-instantiation order are visible
+in the IR.
+
+`extern "C"` is the FFI used for `library/std/llvm.hr`: scalar and pointer
+arguments have a direct C ABI mapping, so `LLVMContextRef`/`LLVMModuleRef`
+(which are opaque pointers in the C API) cross the boundary as `raw u8`.
+Structs cannot cross the boundary, which is why `library/runtime/llvmc.c`
+wraps the few multi-argument C API calls. That shim lives with the runtime in
+`library/runtime/`, together with the freestanding `rt.c` and the hosted
+`hostmain.c` used by the native backend.
 
 ### 19.4b C backend (secondary, cross-check)
 
@@ -2611,7 +2760,20 @@ lc fmt     <file.harmony>   canonical formatter (one style, no options)
 
 flags:  --format=pretty|line|json   --all   --strict   --deny-unchecked
         --no-color   --ascii   -o <out>
+        -O0 -O1 -O2 -O3 -Os -Oz -Og -Ofast   optimization level (-O2 default)
+        -j<N>  --jobs=<N>  --sequential   parallel LLVM workers (default: CPUs)
+        --backend=llvm-c|clang             native LLVM-C (default) or clang debug path
 ```
+
+`-O<level>` selects the LLVM optimization level for code generation and is
+passed straight through to the LLVM pipeline, so `-O3` runs the full
+aggressive pipeline, `-Os`/`-Oz` optimize for size, `-Og` keeps debug-friendly
+output, and `-Ofast` enables fast-math-style assumptions. **`-O2` is the
+default** when no level is given (a plain `-O` also means `-O2`). Every level
+is honored by `build`, `run`, and `emit-llvm`; `emit-llvm` prints the
+*unoptimized* IR (byte-deterministic, what the determinism tests and the
+self-host byte-identity milestone compare) unless a level is given explicitly,
+in which case it prints the optimized IR.
 
 ### 19.6 Test strategy
 
@@ -2694,6 +2856,7 @@ any — the compiler must keep.
 | Trap message format, exit status 70, stdout flush | Library. The compiler only emits "call the trap hook with this location." |
 | Stack-overflow guard handler (`T-STACK`) | A std runtime module that installs the handler at startup. |
 | Program entry: argv, calling `main`, turning its return value into an exit code | A std runtime module. |
+| The freestanding memory builtins clang's optimizer may emit (`memset`/`memcpy`/`memmove`/`memcmp`) | Library. A large aggregate initialization or copy is lowered to these libcalls; with no libc linked, the runtime must provide them. |
 | `on_trap` hook for freestanding or embedded builds | Library-level hook, which must return `never`. There is no unwinding. |
 
 #### 19.8.5 Protocol implementations
@@ -2795,24 +2958,25 @@ everything above it can be audited as ordinary code.
 | No user-defined abilities (traits), so no user-defined generic algorithms over behavior (e.g., a generic `sort` with a custom comparison) | Built-in `eq`/`ord` cover common cases. (`abilities` arrives in v1, §20.4.) |
 | No outlives bounds on `life` | Restructure; some advanced signatures are rejected. |
 | No partial moves | `replace`, `clone`, or consuming methods. (Struct patterns soften this in v1, §20.3 item 6.) |
+| A reference to a fat reference (`&&str`, `&&[T]`) collapses to the fat pair | Keep the pair itself (index into a raw slot buffer when a generic container must hold `&str`); nested references need the M2/M3 ownership work. Generic-call unification no longer mis-infers `T = u8` from `&T` against `&str`. |
 | No threads | Single-threaded by design in v0. (v1 adds threads with detached-thread support, §20.3 item 4.) |
 | No `?`-style propagation | Explicit `switch` on `Outcome`. |
 | Long list drops recurse | Hand-written iterative `cleanup` (`DROP-02` warns). |
 
 ### 20.2 Deliberately left out of v0
 
-User-defined abilities (`abilities`, v1; `trait` elsewhere), closures, macros, operator overloading, partial moves, `?`/`try`, ternary, threads, shared ownership, interior mutability, mutable globals, unions, `goto`, exceptions, null, implicit conversions, inheritance, and a preprocessor.
+User-defined abilities (`abilities`, v1; `trait` elsewhere), closures, macros, operator overloading, partial moves, `?`/`try`, ternary, threads, shared ownership, interior mutability, mutable globals, unions, `goto`, exceptions, null, implicit conversions, inheritance, and a preprocessor. The planned macro form (§20.5) is a **scoped AST macro, not a preprocessor**; it is future work, not part of v1.
 
 ### 20.3 Decisions on the open questions (resolved for v1)
 
 These were open in the v0.3 draft; they are now decided, to be implemented in v1 (v0 scope is unchanged):
 
-1. **Structured reason strings: yes.** `unchecked` reasons may carry a tag from a small vocabulary plus free text, e.g. `unchecked(index_checked, "i < len on line 5")`, so `lc audit` can group sites by kind of promise. The plain-string form stays valid.
-2. **`switch` guards: yes.** `case Has(x) if (x > 3):` is accepted; a guarded case still counts for exhaustiveness only when its pattern alone is irrefutable for that variant, and guards never suppress the `default`-required rule on open domains.
-3. **Shared ownership: yes.** v1 adds `Shared<T>` — non-atomic, single-threaded, with `weak` handles — deliberately boring and visibly costly.
-4. **Concurrency: yes, including detached threads.** Threads come with share-style capability markers (ordinary words, not reserved keywords) and **support detached threads** (a thread not tied to a structured scope), not just structured scopes.
-5. **`try` statement: yes.** `let x = try parse(s);` returns early on `Bad`, removing the most common boilerplate without hiding control flow.
-6. **Named fields in enum payloads and struct patterns in `switch`: yes.** Both are accepted; struct patterns also soften the "no partial moves" limitation.
+1. **Structured reason strings: yes.** `unchecked` reasons may carry a tag from a small vocabulary plus free text, e.g. `unchecked(index_checked, "i < len on line 5")`, so `lc audit` can group sites by kind of promise. The plain-string form stays valid. *Implemented in the final compiler (v1 batch 1).*
+2. **`switch` guards: yes.** `case Has(x) if (x > 3):` is accepted; a guarded case still counts for exhaustiveness only when its pattern alone is irrefutable for that variant, and guards never suppress the `default`-required rule on open domains. *Implemented in the final compiler (v1 batch 1).* A guarded `A(x)` covers variant `A`; a guarded `A(5)` does not, and scalar switches still need `default`.
+3. **Shared ownership: yes.** v1 adds `Shared<T>` — non-atomic, single-threaded, with `weak` handles — deliberately boring and visibly costly. *Implemented in the final compiler: `library/std/shared.hr` provides `Shared<T>::make`, `clone`, `get`, `downgrade`, explicit `release`, and `Weak<T>::upgrade -> Maybe<Shared<T>>`. Since drop glue is not implemented, owners call `release` explicitly; the last strong owner destroys the value and the last weak owner frees the control block.*
+4. **Concurrency: yes, including detached threads.** Threads come with share-style capability markers (ordinary words, not reserved keywords) and **support detached threads** (a thread not tied to a structured scope), not just structured scopes. *Implemented in the final compiler: `library/std/thread.hr` provides `thread::spawn`, `Thread::join`, and `Thread::detach` over `clone(2)`/futex hooks in the runtime. `Share<T>::as_raw()` mints an opaque `ThreadArg`, the capability marker `spawn` requires; `fnptr(f)` supplies the entry address. A thread entry is `fn(raw u8) -> i64`; its result is published by `join`. A detached thread's stack is reclaimed at process exit (it cannot unmap the page it is running on).* No libc or pthread is used, so the freestanding link still works.
+5. **Early exit on failure: yes, as an `else` clause on a simple statement.** The original `let x = try parse(s);` spelling was redesigned: there is **no `try` keyword**. Instead `let x = parse(s) else ... ;`, `x = parse(s) else ... ;` and `parse(s) else ... ;` all work. The scrutinee must be a `Maybe` or `Outcome` (other enums keep using `switch`). The success payload binds the target (or is discarded for an expression statement); the failure payload is moved into the optional `(e)` binding, visible only inside the clause block. `else return;` forwards `Bad(e)`/`Empty` and is only legal when the enclosing function returns the same shape with an identical error type. Other exits (`break`, `continue`, `trap(...)`, `exit(...)`) are written out, and every path must exit (FLOW-01). Implemented in the final compiler only; harmony-base stays v0.
+6. **Named fields in enum payloads and struct patterns in `switch`: yes.** Both are accepted; struct patterns also soften the "no partial moves" limitation. *Implemented in the final compiler: variants may declare `Variant { field: Type, ... }`; those variants can be constructed with `Enum::Variant { .field = value, ... }` (positional construction still works) and matched with `case Variant { field: pattern, ... }:`. Struct values can be matched the same way with `case Point { x: 0, y: y }:`. Field lists may be partial, literal fields are tested, bound fields become arm bindings, and qualified names and guards work as usual. Unknown field names report `TYPE-02`; a struct pattern on another kind of subject reports `TYPE-01`.*
 7. **Function pointers: yes.** `fn(i32) -> i32` is safe and cheap and comes in v1; it is "enough" without closures.
 8. **Unsuffixed integer literals: `i32`.** C-like and predictable; aggressive `usize` inference for indices is not done.
 9. **`unchecked` blocks as expressions: no.** Blocks stay statements; the declare-then-assign pattern keeps the "no trailing-expression magic" rule intact.
@@ -2826,7 +2990,215 @@ These were open in the v0.3 draft; they are now decided, to be implemented in v1
 - The concept matches how the language already speaks: the v0 bounds (`copy`, `eq`, `ord`) are *abilities a type has*, so a user-defined one is declared in an `abilities` block — `abilities Shape { ... }` — parallel to `methods Type { ... }`, and consumed as the same bound syntax (`<T: Drawable + ord>`).
 - `trait` (like `impl`, `match`, `Box`) becomes a **recognized foreign word**: writing it earns a `NAME-02` translation hint (`trait Shape { ... }` → `abilities Shape { ... }`), never a bare "unknown name".
 
-Three keyword reservations are **dropped**: `spawn`, `send`, and (per the rename above) `trait`. Concurrency in v1 will use ordinary names (e.g. `thread.spawn(...)`-style methods or contextual words), not reserved keywords. The reserved-for-the-future list in §4.2 is therefore `abilities` `async` `await` `macro` `try`.
+Four keyword reservations are **dropped**: `spawn`, `send`, `try`, and (per the rename above) `trait`. Concurrency in v1 uses ordinary names (e.g. `thread.spawn(...)`-style methods), and early exit on failure is an `else` clause; neither needs a keyword. The reserved-for-the-future list in §4.2 is therefore `abilities` `async` `await` `macro`.
+
+### 20.5 Future design: scoped AST macros
+
+**Status: design only — not implemented, not in v1.** `macro` is reserved (§4.2), and `#`/`...` are reserved tokens (§4.4), but no compiler stage expands them yet. This section records the intended semantics so later work does not accidentally drift into text substitution.
+
+#### 20.5.1 What a macro is
+
+A `macro` is **not** text substitution and **not** a runtime function:
+
+1. It is expanded **after parsing and module resolution, before type/borrow checking** — new stage 3.5 in §19.1, between stages 3 and 4.
+2. It uses ordinary Harmony syntax (`let`, `if`, `for`, `switch`, `return`) instead of `$` sigils.
+3. Because Harmony has no block-expressions (`if`/`switch` are statements, §8), a `-> expr` macro acts as an **inline scoped block** whose `return` yields the value of `#name(...)`.
+
+This is deliberately **not a preprocessor** (§20.2): the input is a resolved AST, not source text, and all checking still happens on the expanded tree.
+
+#### 20.5.2 Syntax forms
+
+```c
+// 1. Statement macro (invoked as a statement, ends with `;`)
+macro log_if(flag: expr, msg: code) {
+    if (!flag) { return; }          // exits this expansion only
+    eprintln("{}", msg);
+}
+
+// 2. Expression macro (invoked inside any expression)
+macro max(a: expr, b: expr) -> expr {
+    let mut best = a;
+    if (b > best) { best = b; }
+    return best;                    // yields the value of `#max(...)`
+}
+
+// 3. One-liner expression shorthand (`= <expr>;`)
+macro square(x: expr) = x * x;      // sugar for: -> expr { return x * x; }
+
+// 4. Variadic macro (`...`)
+macro vec(items: expr...) -> expr {
+    let mut v = Vec::make();
+    for (x : items) { v.push(x); }  // unrolls at expansion time
+    return v;
+}
+```
+
+Call-site rules:
+
+* **Always prefixed with `#` and parenthesized:** `#max(a, b)`, `#log_if(v, msg);`.
+  * Why `#`: `!` is already logical-not (`!flag`), and `#` makes compile-time expansion, lazy `code` arguments, and macro `return` boundaries immediately visible to readers.
+  * Parentheses `(...)` are always used (even for `#vec(1, 2, 3)`), avoiding Rust's `[]`/`{}`/`()` guessing game.
+* **Statement vs. expression:**
+  * Macros without `-> expr` may **only** be called as a statement (`#log_if(...);`), requiring `;` per §4.4.
+  * Macros with `-> expr` (or `= expr;`) yield a value and can be used anywhere an expression is valid, including as an expression statement (`#do_thing();`, value discarded).
+  * In an expression macro `return;` is `MACRO-02`; in a statement macro `return expr;` is also `MACRO-02`.
+* **Modules (§6.7):** macros are private to their file unless marked `export macro ...`. Imported macros are called with their module prefix: `#math::max(a, b)`. A macro and a function may share a name: the `#` prefix selects the macro namespace.
+* **Scope:** macro declarations are top-level items only — not inside `fn` or `methods` blocks (MACRO-02).
+
+#### 20.5.3 Parameter kinds
+
+Instead of runtime types, macro parameters declare **how the argument is parsed and when it is evaluated**:
+
+| Kind | Accepts | Evaluated when? | Typical use |
+|---|---|---|---|
+| `expr` | Any expression | **Once, left-to-right**, at entry to the expansion | `#max(a, b)`, `#square(next())` — kills C's double-evaluation bug |
+| `code` | Any expression | **Lazy (on each use)** — skipped if never reached | Guards, assertions, short-circuiting, retries |
+| `block` | `{ ... }` statement block | **Lazy (on each use)** | Timing/profiling, scoped wrappers, repeat-N-times |
+| `type` | Any type (`i32`, `Vec<u8>`) | Compile-time AST node | Generic helpers, cast/size macros |
+| `ident` | A bare identifier | Compile-time AST node | Field names, method names, variable names |
+
+These five words are **contextual**, only meaningful after the `:` in a macro parameter list (§4.2); they are not new reserved keywords.
+
+**Why `expr` vs. `code` matters.** This single distinction eliminates C's two biggest macro traps while keeping things simple:
+
+* In `macro square(x: expr) = x * x;`, calling `#square(next_int())` evaluates `next_int()` **once** into a hidden temporary `__arg0`, then computes `__arg0 * __arg0` (still overflow-checked by Harmony!).
+* In `macro log_if(flag: expr, msg: code)`, `flag` is evaluated once up front, while `msg` is only evaluated if execution reaches `eprintln("{}", msg);`. A `code` or `block` parameter used **twice** evaluates its argument **twice** — write a local `let` inside the macro if you need once-only behavior.
+
+**Variadic packs (`...`).** Any parameter kind may end in `...` to accept **0 or more** comma-separated arguments (e.g. `items: expr...`, `conds: code...`). A parameter pack must be the **last** parameter, and can be used in two ways inside the macro:
+
+1. **Compile-time unrolling:** `for (x : pack) { ... }` unrolls the loop body once per argument, in order. This is a *compile-time* `for`, not the runtime loop of §8.5; `break`/`continue` in it are `MACRO-04` because there is no runtime loop to exit.
+2. **Call forwarding (`pack...`):** passing `pack...` to a function, `println`/`format`, or another macro splices the arguments in order:
+   ```c
+   macro debug(fmt: expr, args: expr...) {
+       eprintln(fmt, args...);
+   }
+   ```
+   Spread arguments are still checked by `FMT-01` after expansion; a pack spread outside a call is `MACRO-04`.
+
+#### 20.5.4 Semantic rules
+
+**Rule 1: Scoped `return`.** `return` written **in the macro body** exits **only the macro expansion**:
+
+* In a `-> expr` macro, every control-flow path must end in `return <expr>;` (or a diverging call like `trap(...)`), just like a function (`MACRO-02` otherwise).
+* In a statement macro, `return;` exits the expansion early; execution continues after the `#macro(...);` call in the caller.
+* `return`, `break`, or `continue` written **inside a caller's `code` or `block` argument** keep the **caller's** meaning: they exit the caller's function or loop, running drops cleanly along the way. Implementing this needs provenance on each AST node (macro-origin vs caller-origin), not a textual splice.
+
+**Rule 2: Evaluation order and short-circuiting (§7.5).**
+
+1. Expression macros evaluate **in-place** where `#name(...)` appears — not hoisted above the enclosing statement. So in `ok && #check(x)`, `#check(x)` does **not** run if `ok` is `false`.
+2. All `expr` arguments are evaluated strictly **left-to-right** when entering the expansion, bound to invisible hygienic `let` bindings (`__arg0`, `__arg1`, ...). Those names are compiler-generated and cannot be spelled or observed by user code.
+3. Calling `#name(a, b)` where an `expr` parameter is non-`copy` (e.g., `String`) moves the value into the expansion, just like a `fn` call. Using that `expr` parameter twice inside the macro body triggers the normal `MOVE-01` diagnostic unless borrowed (`&a`).
+
+**Rule 3: Automatic hygiene.**
+
+* **No variable capture:** locals declared inside a macro (like `best` in `#max` or `v` in `#vec`) live in the macro's own hygiene scope. They cannot shadow, overwrite, or be read by caller code — and caller variables inside `code`/`block` arguments resolve in the **caller's** scope.
+* **Module-scoped names:** functions, types, and `const`s named in a macro body (like `Vec::make()`) resolve in the **macro's defining module**, even if the caller did not import them. This follows from resolving names at definition time (or carrying module provenance), not from the caller's scope.
+* **No token pasting:** there is no `##` identifier gluing or stringification (`#x`). If you need a name, pass an `ident`.
+
+**Rule 4: Safety and `unchecked` preservation (§13).** Macros have **zero** special safety privileges:
+
+* Expanded code goes through full type inference, move/borrow/`life` checking, bounds checks, overflow traps, and `FMT-01` format checking.
+* A macro **cannot** hide `unchecked` operations from callers without writing an explicit `unchecked("...") { ... }` block inside the macro body — and `harmony audit` still flags that site, noting both the macro definition and the call site.
+
+**Rule 5: Expansion limits.** Macros may call other macros, up to a fixed expansion depth of **64** to prevent infinite expansion (`MACRO-03`).
+
+#### 20.5.5 Examples in action
+
+Short-circuiting with `code...`:
+
+```c
+macro all_true(conds: code...) -> expr {
+    for (c : conds) {
+        if (!c) { return false; }   // exits #all_true immediately
+    }
+    return true;
+}
+
+// step2() is never called if step1() returns false
+if (#all_true(ready, step1(), step2())) {
+    println("go");
+}
+```
+
+Scoped timing with `block`:
+
+```c
+macro timed(label: expr, body: block) {
+    let t0 = clock::now_ms();
+    body;                           // runs caller's block in place
+    let dt = clock::now_ms() - t0;
+    println("[{}] {} ms", label, dt);
+}
+
+#timed("parse", {
+    let ast = parse(&src);
+    check(&ast);
+});
+```
+
+Safe checked unwrap or fallback (`code` avoids evaluating the fallback unnecessarily):
+
+```c
+macro or_else(opt: expr, fallback: code) -> expr {
+    switch (opt) {
+        case Has(v): { return v; }
+        case Empty:  { return fallback; }
+    }
+}
+
+let user = #or_else(find_user(id), load_default_user());
+```
+
+Compile-time field access with `ident`:
+
+```c
+macro swap_field(a: expr, b: expr, field: ident) {
+    swap(&mut a.field, &mut b.field);
+}
+
+#swap_field(&mut p1, &mut p2, x);
+```
+
+#### 20.5.6 Grammar extension (fits §18 EBNF)
+
+```ebnf
+item          = ... | [ "export" ] macro_decl ;
+
+macro_decl    = "macro" ID "(" [ mparams ] ")" macro_body ;
+mparams       = mparam { "," mparam } [ "," ] ;
+mparam        = ID ":" mkind [ "..." ] ;
+mkind         = "expr" | "code" | "block" | "type" | "ident" ;
+macro_body    = [ "->" "expr" ] block
+              | "=" expr ";" ;
+
+(* Call sites *)
+stmt          = ... | macro_stmt ;
+macro_stmt    = "#" path "(" [ margs ] ")" ";" ;
+primary       = ... | macro_expr ;
+macro_expr    = "#" path "(" [ margs ] ")" ;
+
+margs         = marg { "," marg } [ "," ] ;
+marg          = ( expr | type | block ) [ "..." ] ;
+```
+
+*(In `marg`, an `ident` is already valid `expr`/`type` syntax; the expander validates that the argument matches the declared `mkind` and reports `MACRO-01` otherwise.)* The lexer must gain `#` and `...` tokens (§4.4); `->` (Arrow) already exists.
+
+#### 20.5.7 Diagnostics
+
+| Code | Sev | Trigger | Primary hint / fix |
+|---|---|---|---|
+| `MACRO-01` | stop | Wrong macro argument count or kind (e.g. `{ ... }` passed to `expr`, or `a + 1` passed to `ident`) | Show expected parameter `kind` and call site |
+| `MACRO-02` | stop | Macro form/position mismatch (statement macro in expression position, `-> expr` missing `return`, `return` without a value in `-> expr`, macro declared inside a block) | Add `-> expr`, use `return`, or call as `#name(...);` |
+| `MACRO-03` | stop | Macro expansion exceeded max depth (64) | Break recursive macro cycle |
+| `MACRO-04` | stop | `pack...` spread outside a call, or `break`/`continue` in unrolled `for (x : pack)` with no enclosing runtime loop | Use `for (x : pack)` or `return` |
+| `NAME-02` | hint | `#define` or `macro_rules!` written | Suggest `const` or `macro name(...) { ... }` |
+
+When a **type or borrow error** happens inside expanded code, the timeline diagnostic (§16.2) adds one context step at the top:
+
+```text
+   ①  14  let m = #max(count, "hi");     expanded from macro `max`
+   ②   3      if (b > best) {            expected i32, found &str  ◂ here
+```
 
 ---
 

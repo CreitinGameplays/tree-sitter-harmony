@@ -1,12 +1,12 @@
-/// A minimal Harmony smoke test.
+/// A Harmony smoke test covering v0, v1 and the documented future forms.
 copy struct Point {
     x: i32;
     y: i32;
 }
 
 enum Shape {
-    Circle(f64),
-    Rect(f64, f64),
+    Circle { radius: f64 },   // v1: named payload fields
+    Rect(f64, f64),            // positional payloads still work
     Dot,
 }
 
@@ -17,21 +17,36 @@ fn add(a: i32, b: i32) -> i32 {
 // A foreign declaration names its ABI (6.8); "C" is the only one implemented.
 extern "C" fn abs(x: i32) -> i32;
 
+// v1: structured `unchecked` reason tags.
+unchecked(index_checked, "i is checked against len") fn get(v: &[i32], i: usize) -> i32 {
+    return v[i];
+}
+
 fn main() {
     let mut p = Point { .x = 10, .y = 20 };
     let nums = [1, 2, 3];
 
     if (p.x > 0) {
-        println("hello\\nHarmony");
+        println("hello\nHarmony");
     }
 
     for (i : 0..=2) {
         p.x += nums[i];
     }
 
+    // v1: guards and named-field struct patterns.
     switch (Shape::Dot) {
-        case Dot: { println("dot"); }
-        case Circle(r): { println("circle {}", r); }
+        case Circle { radius: r } if (r > 0.0): { println("circle {}", r); }
         case Rect(w, h): { println("rect {} {}", w, h); }
+        case Dot: { println("dot"); }
     }
+    switch (p) {
+        case Point { x: 0, y: y }: { println("y = {}", y); }
+        default: { }
+    }
+
+    // v1: else clauses on simple statements.
+    let first = nums.get(0) else return;
+    let n = add(20, 22) else (e) { return; };
+    println("{}", n);
 }

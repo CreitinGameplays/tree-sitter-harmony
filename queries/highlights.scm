@@ -1,4 +1,4 @@
-; Harmony v0.3.3 — Tree-sitter highlights for Zed.
+; Harmony v0.3.3 + v1 (and future §20.5) — Tree-sitter highlights for Zed.
 ; Node names and fields in this query are defined by the accompanying grammar.js.
 
 ; Comments
@@ -29,6 +29,8 @@
 (struct_declaration name: (identifier) @type @type.definition)
 (enum_declaration name: (identifier) @type @type.definition)
 (enum_variant name: (identifier) @variant)
+; v1: named enum payload fields
+(named_payload_field name: (identifier) @property)
 (field_declaration name: (identifier) @property)
 (field_initializer name: (identifier) @property)
 (parameter name: (identifier) @variable.parameter)
@@ -50,7 +52,32 @@
 
 ; Variant patterns and qualified paths
 (variant_pattern name: (path_expression name: (identifier) @variant))
+; v1: struct / named-field patterns
+(struct_pattern name: (path_expression name: (identifier) @variant))
+(field_pattern name: (identifier) @property)
 (path_expression path_segment: (identifier) @namespace)
+
+; v1: the tag in `unchecked(tag, "reason")`
+(unchecked_header tag: (identifier) @keyword)
+
+; v1: `else` clauses on simple statements and their failure binding
+(else_clause "else" @keyword.control)
+(else_clause binding: (identifier) @variable)
+
+; Future (§20.5): scoped AST macros
+(macro_declaration name: (identifier) @function.macro)
+(macro_parameter name: (identifier) @variable.parameter)
+(macro_kind "expr" @keyword)
+(macro_kind "code" @keyword)
+(macro_kind "block" @keyword)
+(macro_kind "type" @keyword)
+(macro_kind "ident" @keyword)
+(macro_statement "#" @keyword.operator)
+(macro_expression "#" @keyword.operator)
+(reserved_keyword "abilities" @keyword)
+(reserved_keyword "async" @keyword)
+(reserved_keyword "await" @keyword)
+(reserved_keyword "macro" @keyword)
 
 ; `self` is a receiver/builtin variable.
 "self" @variable.builtin
@@ -70,7 +97,7 @@
    callee: (postfix_expression
      (primary_expression
        (path_expression name: (identifier) @function.builtin))))
- (#match? @function.builtin "^(print|println|eprintln|format|trap|assert|unreachable|exit|drop|leak|swap|replace)$"))
+ (#match? @function.builtin "^(print|println|eprintln|format|trap|assert|unreachable|exit|drop|leak|swap|replace|alloc|dealloc|reinterpret|fnptr)$"))
 
 ; Intrinsic forms
 "heap" @function.builtin
@@ -142,6 +169,7 @@
 "~" @operator
 ".." @operator
 "..=" @operator
+"..." @operator
 
 ; Delimiters and punctuation
 "(" @punctuation.bracket
