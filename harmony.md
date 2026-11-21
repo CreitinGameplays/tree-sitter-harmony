@@ -61,6 +61,7 @@ File extension: `.harmony`
 | impl (rewrite) | v1 threads | `library/std/thread.hr` adds joined and detached threads over raw `clone(2)` + futex hooks in `library/runtime/rt.c`. The `Share<T>` capability marker mints an opaque `ThreadArg` that `spawn` requires; `fnptr(f)` is the small final-only intrinsic for a function address. All three v1 gates pass; harmony-base stays v0. |
 | impl (rewrite) | v1 `else` clause | The final compiler accepts `let x = f() else return;`, `else (e) { ... };`, `else continue;`, `else break;` and `else trap(...);` on `let`, plain `=` assignment, and expression statements. `try` is not a keyword; the success payload binds the target, `else return` forwards `Bad(e)`/`Empty`, and FLOW-01/02/03 reject fallthrough, mismatched errors, and impossible forwarding. These forms are final-language only; harmony-base stays v0. |
 | impl (rewrite) | v1 patterns | The final compiler accepts named enum payload fields (`Variant { name: Type }`), named construction (`Enum::Variant { .name = value }`, positional still works), and struct patterns in `switch` (`case Point { x: 0, y: y }:`) with literal tests, bindings, qualified names and guards. Unknown fields are `TYPE-02`; a struct pattern on a non-struct/enum subject is `TYPE-01`. |
+| impl (rewrite) | v1 function pointers | The final compiler accepts the structural `fn(Params) -> Ret` type. A declared function name used as a value produces a function pointer (annotation optional); signatures must match (`TYPE-01`) and indirect calls check arity (`TYPE-04`) and argument types. Pointers are `copy` and work in locals, fields, arrays and return positions. The separate `fnptr(name)` intrinsic still supplies opaque thread-entry addresses. |
 | design (future) | §20.5 scoped AST macros | Documented the intended v2 macro system: expansion at stage 3.5, `#name(...)` calls, `expr`/`code`/`block`/`type`/`ident` parameter kinds, hygienic scopes, scoped `return`, variadic packs, `MACRO-01..04`, and the grammar extension. **Design only — no implementation, not in v1.** |
 | impl (rewrite) | R6 LLVM backend | The self-hosted compiler now has its own LLVM IR emitter (`harmony/codegen/llvm/`). On all 95 programs in the codegen corpus, its IR is **byte-identical** to harmony-base's, including checked arithmetic, traps, slices, aggregates, generics, methods, enums, switches, formatting calls, and multi-module programs. |
 
@@ -319,6 +320,7 @@ Creating one is safe (`raw(&x)`); **using** one (dereference, arithmetic, read, 
 |---|---|
 | All integer, float, `bool`, `char` types | yes |
 | `&T`, `raw T`, `raw mut T` | yes |
+| `fn(A, B) -> R` (v1) | yes |
 | `[T; N]` | iff `T` is copy |
 | `String`, `Vec<T>`, `Heap<T>` | **no** |
 | `&mut T` | **no** (reborrowed instead) |
@@ -394,6 +396,33 @@ let d: f64       = big.approx<f64>();  // nearest representable float
 let e: Maybe<i32> = 3.9.narrow<i32>(); // Has(3); Empty for NaN or out of range
 let f: Maybe<char> = char::from_code(0x1F980);
 ```
+
+### 5.11 Function pointer types (v1)
+
+A function name can be used as a value. Its type is a first-class,
+pointer-sized **function pointer**, written `fn(ParamTypes) -> ReturnType`:
+
+```c
+fn add(a: i32, b: i32) -> i32 { return a + b; }
+
+fn apply(f: fn(i32, i32) -> i32, a: i32, b: i32) -> i32 {
+    return f(a, b);              // indirect call
+}
+
+let f: fn(i32, i32) -> i32 = add;  // annotated
+let g = add;                       // inferred from the function signature
+let sum = apply(add, 20, 22);      // function name as an argument
+```
+
+Function pointer types are **structural**: `fn(i32) -> i32` matches any
+declared function with that exact parameter and return signature; a mismatch
+is a `TYPE-01` error. An indirect call checks arity (`TYPE-04`) and argument
+types (`TYPE-01`) from the pointer's signature. A function pointer is `copy`,
+can be stored in locals, struct fields and arrays, returned from functions,
+and reassigned. The bare `fnptr(name)` intrinsic remains the separate,
+final-only way to obtain an **opaque** address for thread entry points
+(§20.3 item 4); it is not a typed function value. Closures and captured
+environments are deliberately not part of v1.
 
 ---
 
@@ -2499,9 +2528,11 @@ variant       = ID [ "(" type { "," type } ")" ] ;
 methods_block = "methods" [ generics ] type "{" { [ "export" ] fn_decl } "}" ;
 
 (* ---------- types ---------- *)
-type          = ref_type | raw_type | array_type | slice_type | path_type ;
+type          = ref_type | raw_type | array_type | slice_type
+              | fn_type | path_type ;                       (* fn_type is v1 *)
 ref_type      = "&" [ "mut" ] [ life_use ] type ;
 raw_type      = "raw" [ "mut" ] type ;
+fn_type       = "fn" "(" [ type { "," type } ] ")" "->" type ;
 array_type    = "[" type ";" expr "]" ;
 slice_type    = "[" type "]" ;                         (* only behind & or raw *)
 path_type     = ID { "::" ID } [ "<" targ { "," targ } ">" ] ;
@@ -2977,7 +3008,7 @@ These were open in the v0.3 draft; they are now decided, to be implemented in v1
 4. **Concurrency: yes, including detached threads.** Threads come with share-style capability markers (ordinary words, not reserved keywords) and **support detached threads** (a thread not tied to a structured scope), not just structured scopes. *Implemented in the final compiler: `library/std/thread.hr` provides `thread::spawn`, `Thread::join`, and `Thread::detach` over `clone(2)`/futex hooks in the runtime. `Share<T>::as_raw()` mints an opaque `ThreadArg`, the capability marker `spawn` requires; `fnptr(f)` supplies the entry address. A thread entry is `fn(raw u8) -> i64`; its result is published by `join`. A detached thread's stack is reclaimed at process exit (it cannot unmap the page it is running on).* No libc or pthread is used, so the freestanding link still works.
 5. **Early exit on failure: yes, as an `else` clause on a simple statement.** The original `let x = try parse(s);` spelling was redesigned: there is **no `try` keyword**. Instead `let x = parse(s) else ... ;`, `x = parse(s) else ... ;` and `parse(s) else ... ;` all work. The scrutinee must be a `Maybe` or `Outcome` (other enums keep using `switch`). The success payload binds the target (or is discarded for an expression statement); the failure payload is moved into the optional `(e)` binding, visible only inside the clause block. `else return;` forwards `Bad(e)`/`Empty` and is only legal when the enclosing function returns the same shape with an identical error type. Other exits (`break`, `continue`, `trap(...)`, `exit(...)`) are written out, and every path must exit (FLOW-01). Implemented in the final compiler only; harmony-base stays v0.
 6. **Named fields in enum payloads and struct patterns in `switch`: yes.** Both are accepted; struct patterns also soften the "no partial moves" limitation. *Implemented in the final compiler: variants may declare `Variant { field: Type, ... }`; those variants can be constructed with `Enum::Variant { .field = value, ... }` (positional construction still works) and matched with `case Variant { field: pattern, ... }:`. Struct values can be matched the same way with `case Point { x: 0, y: y }:`. Field lists may be partial, literal fields are tested, bound fields become arm bindings, and qualified names and guards work as usual. Unknown field names report `TYPE-02`; a struct pattern on another kind of subject reports `TYPE-01`.*
-7. **Function pointers: yes.** `fn(i32) -> i32` is safe and cheap and comes in v1; it is "enough" without closures.
+7. **Function pointers: yes.** `fn(i32) -> i32` is safe and cheap and comes in v1; it is "enough" without closures. *Implemented in the final compiler: `fn(Params) -> Ret` is a structural, `copy`, pointer-sized type. A declared function name coerces to it when the signature matches (`TYPE-01` on mismatch), and calling a function-pointer value checks arity and argument types from the pointer's signature. Function pointers work in locals, fields, arrays and return positions. `fnptr(name)` stays a separate opaque-address intrinsic for thread entries (item 4); harmony-base stays v0.*
 8. **Unsuffixed integer literals: `i32`.** C-like and predictable; aggressive `usize` inference for indices is not done.
 9. **`unchecked` blocks as expressions: no.** Blocks stay statements; the declare-then-assign pattern keeps the "no trailing-expression magic" rule intact.
 

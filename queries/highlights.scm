@@ -42,6 +42,9 @@
 ; Type names — primitive, prelude, and user-defined names share the same grammar node.
 (type_path name: (identifier) @type)
 (type_path path_segment: (identifier) @type)
+; v1: `fn(A, B) -> R` function-pointer type. The `fn` token is highlighted by
+; the declaration-keyword rule below; this capture marks the type node itself.
+(function_type "fn" @keyword.function)
 
 ; Members and method calls
 (postfix_expression

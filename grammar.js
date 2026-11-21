@@ -225,7 +225,19 @@ export default grammar({
       $.raw_type,
       $.array_type,
       $.slice_type,
+      // v1: first-class function pointer `fn(A, B) -> R`. The compiler parses
+      // the same form in type position; a trailing comma is tolerated.
+      $.function_type,
       $.type_path,
+    ),
+
+    function_type: ($) => seq(
+      "fn",
+      "(",
+      optional(commaSep1($.type)),
+      ")",
+      "->",
+      $.type,
     ),
 
     reference_type: ($) => seq("&", optional("mut"), optional($.life_use), $.type),
