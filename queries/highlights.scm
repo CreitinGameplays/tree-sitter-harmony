@@ -28,6 +28,9 @@
 (constant_declaration name: (identifier) @constant)
 (struct_declaration name: (identifier) @type @type.definition)
 (enum_declaration name: (identifier) @type @type.definition)
+; v1: abilities block and its required method signatures
+(abilities_declaration name: (identifier) @type @type.definition)
+(ability_signature name: (identifier) @function)
 (enum_variant name: (identifier) @variant)
 ; v1: named enum payload fields
 (named_payload_field name: (identifier) @property)
@@ -77,7 +80,6 @@
 (macro_kind "ident" @keyword)
 (macro_statement "#" @keyword.operator)
 (macro_expression "#" @keyword.operator)
-(reserved_keyword "abilities" @keyword)
 (reserved_keyword "async" @keyword)
 (reserved_keyword "await" @keyword)
 (reserved_keyword "macro" @keyword)
@@ -90,10 +92,9 @@
 (life_use "life" @keyword)
 (life_use name: (identifier) @label)
 
-; Compiler-known generic bounds
+; Generic bounds: `copy` is a keyword; `eq`, `ord` and user abilities are names.
 (bound "copy" @keyword)
-(bound "eq" @keyword)
-(bound "ord" @keyword)
+(bound (identifier) @type)
 
 ; Prelude functions
 ((postfix_expression
@@ -114,6 +115,7 @@
 "struct" @keyword
 "enum" @keyword
 "methods" @keyword
+"abilities" @keyword
 "copy" @keyword.modifier
 "export" @keyword
 "import" @keyword.import

@@ -19,6 +19,15 @@ fn apply(f: fn(i32, i32) -> i32, a: i32, b: i32) -> i32 {
     return f(a, b);
 }
 
+// v1: an abilities block and a user-defined generic bound.
+abilities Drawable {
+    fn label(&self) -> &str;
+}
+
+fn show<T: Drawable + ord>(item: &T) -> &str {
+    return item.label();
+}
+
 // A foreign declaration names its ABI (6.8); "C" is the only one implemented.
 extern "C" fn abs(x: i32) -> i32;
 

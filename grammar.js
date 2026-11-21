@@ -61,6 +61,7 @@ export default grammar({
       $.struct_declaration,
       $.enum_declaration,
       $.methods_block,
+      $.abilities_declaration,
       $.extern_function_declaration,
       // Future (§20.5): scoped AST macros and reserved-for-future words are
       // parsed so editors can highlight them before the compiler implements
@@ -77,14 +78,29 @@ export default grammar({
         $.struct_declaration,
         $.enum_declaration,
         $.methods_block,
+        $.abilities_declaration,
         $.extern_function_declaration,
         $.macro_declaration,
       ),
     ),
 
+    // v1: an abilities block declares required method signatures, used as a
+    // generic bound. `abilities` is a real keyword now, not reserved-for-future.
+    abilities_declaration: ($) => seq(
+      "abilities", field("name", $.identifier),
+      "{", repeat($.ability_signature), "}",
+    ),
+
+    ability_signature: ($) => seq(
+      "fn", field("name", $.identifier),
+      "(", optional($.parameter_list), ")",
+      optional(seq("->", field("return_type", $.type))),
+      ";",
+    ),
+
     // Reserved-for-future words (§4.2). Kept as items so they highlight as
     // keywords even though no compiler stage accepts them yet.
-    reserved_keyword: ($) => choice("abilities", "async", "await", "macro"),
+    reserved_keyword: ($) => choice("async", "await", "macro"),
 
     import_declaration: ($) => seq("import", $.string_literal, ";"),
 
@@ -136,7 +152,8 @@ export default grammar({
 
     life_parameter: ($) => seq("life", field("name", $.identifier)),
 
-    bound: ($) => choice("copy", "eq", "ord"),
+    // `copy` is a keyword; `eq`, `ord` and v1 user ability names are identifiers.
+    bound: ($) => choice("copy", $.identifier),
 
     parameter_list: ($) => commaSep1($.parameter),
 

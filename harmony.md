@@ -62,6 +62,7 @@ File extension: `.harmony`
 | impl (rewrite) | v1 `else` clause | The final compiler accepts `let x = f() else return;`, `else (e) { ... };`, `else continue;`, `else break;` and `else trap(...);` on `let`, plain `=` assignment, and expression statements. `try` is not a keyword; the success payload binds the target, `else return` forwards `Bad(e)`/`Empty`, and FLOW-01/02/03 reject fallthrough, mismatched errors, and impossible forwarding. These forms are final-language only; harmony-base stays v0. |
 | impl (rewrite) | v1 patterns | The final compiler accepts named enum payload fields (`Variant { name: Type }`), named construction (`Enum::Variant { .name = value }`, positional still works), and struct patterns in `switch` (`case Point { x: 0, y: y }:`) with literal tests, bindings, qualified names and guards. Unknown fields are `TYPE-02`; a struct pattern on a non-struct/enum subject is `TYPE-01`. |
 | impl (rewrite) | v1 function pointers | The final compiler accepts the structural `fn(Params) -> Ret` type. A declared function name used as a value produces a function pointer (annotation optional); signatures must match (`TYPE-01`) and indirect calls check arity (`TYPE-04`) and argument types. Pointers are `copy` and work in locals, fields, arrays and return positions. The separate `fnptr(name)` intrinsic still supplies opaque thread-entry addresses. |
+| impl (rewrite) | v1 abilities | The final compiler accepts `abilities Name { fn sig; ... }` blocks and user-defined ability bounds (`<T: Drawable + ord>`). Satisfaction is structural: a type with matching methods has the ability; calls through a bounded parameter resolve to the concrete method after monomorphization. `ABLT-01`/`ABLT-02` report unsatisfied or unknown abilities, and a foreign `trait` block gets the `NAME-02` hint. harmony-base stays v0. |
 | design (future) | §20.5 scoped AST macros | Documented the intended v2 macro system: expansion at stage 3.5, `#name(...)` calls, `expr`/`code`/`block`/`type`/`ident` parameter kinds, hygienic scopes, scoped `return`, variadic packs, `MACRO-01..04`, and the grammar extension. **Design only — no implementation, not in v1.** |
 | impl (rewrite) | R6 LLVM backend | The self-hosted compiler now has its own LLVM IR emitter (`harmony/codegen/llvm/`). On all 95 programs in the codegen corpus, its IR is **byte-identical** to harmony-base's, including checked arithmetic, traps, slices, aggregates, generics, methods, enums, switches, formatting calls, and multi-module programs. |
 
@@ -209,7 +210,7 @@ ordinary library code begins is spelled out in the **split rule** (§19.8).
 
 | Group | Keywords |
 |---|---|
-| Declarations | `fn` `let` `mut` `const` `struct` `enum` `methods` `copy` `export` `import` `extern` |
+| Declarations | `fn` `let` `mut` `const` `struct` `enum` `methods` `abilities` `copy` `export` `import` `extern` |
 | Control flow | `if` `else` `while` `for` `switch` `case` `default` `return` `break` `continue` |
 | Memory and safety | `unchecked` `raw` `self` |
 | Literals and operators | `true` `false` `as` `sizeof` `heap` |
@@ -217,7 +218,7 @@ ordinary library code begins is spelled out in the **split rule** (§19.8).
 
 `life` is **contextual**, so `player.life -= 1;` still compiles. (A game developer's most-typed identifier survives.) The five macro parameter-kind words are contextual too: they are ordinary identifiers everywhere except after the `:` in a macro parameter list.
 
-**Reserved for the future:** `abilities` `async` `await` `macro`. (`try` was dropped from the list in v1: early exit is an `else` clause, not a keyword — §20.3 item 5. `macro` stays reserved for the scoped AST macro design in §20.5, which is **not** in v1.)
+**Reserved for the future:** `async` `await` `macro`. (`abilities` became a declaration keyword in v1 — §6.9, §20.4. `try` was dropped: early exit is an `else` clause, not a keyword — §20.3 item 5. `macro` stays reserved for the scoped AST macro design in §20.5, which is **not** in v1.)
 (`trait` is **not** reserved — the v1 trait-like feature is spelled
 `abilities`, see §20.4. `spawn` and `send` are deliberately **not** reserved
 either — v1 concurrency will use ordinary method-style names, not keywords;
@@ -347,7 +348,7 @@ struct View<life a> { text: &life(a) str; }
 ```
 
 - Parameters are **types** (`T`) and **lives** (`life a`). They are implemented by monomorphization (one copy of the code per instantiation), so there is no runtime cost and no runtime type information.
-- **Bounds** are compiler-known markers, not user-definable abilities (user-defined `abilities` blocks arrive in v1, §20.4):
+- **Bounds** are compiler-known markers (`copy`, `eq`, `ord`) or the name of a user-defined ability (v1, §6.9):
 
 | Bound | Meaning | Who satisfies it |
 |---|---|---|
@@ -355,7 +356,8 @@ struct View<life a> { text: &life(a) str; }
 | `eq` | supports `==` and `!=` | primitives, `str`, `String`, and any user type whose fields are all `eq` (structural) |
 | `ord` | supports `<` `<=` `>` `>=` (implies `eq`) | numbers, `char`, `str`, `String`, and user types structurally (fields in order; enum variants by declaration order) |
 
-- Combine bounds with `+`. Without a bound you can move, store, and borrow a `T`, nothing more.
+- Combine bounds with `+`. An ability name may be mixed with built-in markers (`<T: Drawable + ord>`). Without a bound you can move, store, and borrow a `T`, nothing more.
+- A user-defined ability is declared in an `abilities` block and satisfied structurally by a type's methods (§6.9).
 - Floats satisfy `eq`/`ord` under IEEE rules (comparisons with NaN are false).
 - Variance of lives is inferred by the compiler. You never write it.
 
@@ -626,6 +628,44 @@ sees which convention the foreign symbol uses:
 ; extern "C" abs
 declare i32 @abs(i32)
 ```
+
+### 6.9 Abilities (v1)
+
+An **ability** names a set of required method signatures. It is declared like
+a methods block but contains only signatures, with no bodies:
+
+```c
+abilities Drawable {
+    fn area(&self) -> i32;
+    fn label(&self) -> &str;
+}
+
+struct Square { side: i32; }
+
+methods Square {
+    export fn area(&self) -> i32 { return self.side * self.side; }
+    export fn label(&self) -> &str { return "square"; }
+}
+
+fn show<T: Drawable>(item: &T) -> i32 {
+    return item.area();          // resolved to Square::area after monomorphization
+}
+```
+
+- A type **has** an ability when it provides a method for every requirement,
+  with the same name, receiver spelling and parameter/return types. No `impl`
+  declaration is needed; satisfaction is structural, like the `next`/`cleanup`
+  protocols (§19.8). Parameter names need not match.
+- Bounds are checked for each concrete instantiation (`ABLT-01`); a bound that
+  names no declared ability is `ABLT-02`. An ability name used as a value is
+  `TYPE-05`. Duplicate ability names are `ABLT-02`.
+- Only non-generic method requirements are supported in v1. Built-in bounds
+  (`copy`, `eq`, `ord`) keep their existing behavior and may be combined with
+  abilities using `+`.
+- The template body is checked once against the required signatures, so a
+  missing method is caught even before a concrete type is seen at that site.
+- `trait` is a recognized foreign word: writing `trait Shape { ... }` produces
+  the `NAME-02` translation hint pointing at `abilities` (§16.11, §20.4).
 
 ---
 
@@ -2102,6 +2142,8 @@ SEE    Language guide § Ownership and moves
 | `TYPE-04` | stop | wrong argument count or type | `add(1)` | pass the right arguments |
 | `TYPE-05` | stop | invalid `copy` marking | `copy struct` with a `String` field | drop `copy`, or change the field |
 | `TYPE-06` | stop | bound not satisfied | `<` on a `T` without `ord` | add the bound |
+| `ABLT-01` | stop | ability not satisfied | a `T: Drawable` argument whose type lacks `area` | add the required methods to the type |
+| `ABLT-02` | stop | unknown or duplicate ability | `<T: Nope>` or two `abilities Nope` blocks | declare the ability once, or fix the name |
 | `FMT-01` | stop | format string mismatch | `println("{} {}", x)` | match arguments to `{}` |
 | `FFI-01` | stop | unknown ABI | `extern "Win64" fn ...` | use the C ABI: `extern "C" fn ...` |
 | `CONST-01` | stop | not a compile-time constant | `const A: i32 = compute();` | use a literal, another constant, or a `let` |
@@ -2149,7 +2191,7 @@ When the compiler sees a word from C, C++, Rust, Java, or Go that means somethin
 |---|---|
 | `unsafe { }` | `unchecked("reason") { }` |
 | `impl X { }` | `methods X { }` |
-| `trait Shape { ... }` | `abilities Shape { ... }` (v1 feature; a `NAME-02` hint, not an error) |
+| `trait Shape { ... }` | `abilities Shape { ... }` (v1 feature, now implemented; the `NAME-02` hint points at it) |
 | `match x { A => ... }` | `switch (x) { case A: { ... } }` |
 | `pub fn` | `export fn` |
 | `use foo;` | `import "foo.src";` |
@@ -2501,7 +2543,8 @@ fn main() {
 program       = { import } { item } ;
 import        = "import" STRING ";" ;
 
-item          = [ "export" ] ( fn_decl | const_decl | struct_decl | enum_decl )
+item          = [ "export" ] ( fn_decl | const_decl | struct_decl | enum_decl
+                              | abilities_decl )
               | methods_block
               | extern_decl ;
 
@@ -2514,7 +2557,7 @@ fn_decl       = [ unck_head ] "fn" ID [ generics ] "(" [ params ] ")" [ "->" typ
 generics      = "<" gparam { "," gparam } ">" ;
 gparam        = "life" ID
               | ID [ ":" bound { "+" bound } ] ;
-bound         = "copy" | "eq" | "ord" ;
+bound         = "copy" | "eq" | "ord" | ID ;   (* ID names a v1 ability *)
 
 params        = param { "," param } [ "," ] ;
 param         = self_param | [ "mut" ] ID ":" type ;
@@ -2527,6 +2570,8 @@ enum_decl     = [ "copy" ] "enum" ID [ generics ] "{" variant { "," variant } [ 
 variant       = ID [ "(" type { "," type } ")" ] ;
 
 methods_block = "methods" [ generics ] type "{" { [ "export" ] fn_decl } "}" ;
+abilities_decl = "abilities" ID "{" { ability_sig } "}" ;    (* v1 *)
+ability_sig   = "fn" ID "(" [ params ] ")" [ "->" type ] ";" ;
 
 (* ---------- types ---------- *)
 type          = ref_type | raw_type | array_type | slice_type
@@ -2987,7 +3032,7 @@ everything above it can be audited as ordinary code.
 | No interior mutability | Pass `&mut` explicitly. |
 | No mutable globals | Pass state as parameters. |
 | No closures or function values | Write a named `fn`; pass a state struct. (Function pointers arrive in v1, §20.3 item 7.) |
-| No user-defined abilities (traits), so no user-defined generic algorithms over behavior (e.g., a generic `sort` with a custom comparison) | Built-in `eq`/`ord` cover common cases. (`abilities` arrives in v1, §20.4.) |
+| No user-defined abilities in v0, so no user-defined generic algorithms over behavior (e.g., a generic `sort` with a custom comparison) | Built-in `eq`/`ord` cover common cases. (v1 adds `abilities` blocks with structural satisfaction, §6.9.) |
 | No outlives bounds on `life` | Restructure; some advanced signatures are rejected. |
 | No partial moves | `replace`, `clone`, or consuming methods. (Struct patterns soften this in v1, §20.3 item 6.) |
 | A reference to a fat reference (`&&str`, `&&[T]`) collapses to the fat pair | Keep the pair itself (index into a raw slot buffer when a generic container must hold `&str`); nested references need the M2/M3 ownership work. Generic-call unification no longer mis-infers `T = u8` from `&T` against `&str`. |
@@ -2997,7 +3042,7 @@ everything above it can be audited as ordinary code.
 
 ### 20.2 Deliberately left out of v0
 
-User-defined abilities (`abilities`, v1; `trait` elsewhere), closures, macros, operator overloading, partial moves, `?`/`try`, ternary, threads, shared ownership, interior mutability, mutable globals, unions, `goto`, exceptions, null, implicit conversions, inheritance, and a preprocessor. The planned macro form (§20.5) is a **scoped AST macro, not a preprocessor**; it is future work, not part of v1.
+User-defined abilities are implemented in v1 (§6.9) and are deliberately absent from v0; still deliberately left out of v1 are closures, macros, operator overloading, partial moves, `?`/`try`, ternary, shared ownership, interior mutability, mutable globals, unions, `goto`, exceptions, null, implicit conversions, inheritance, and a preprocessor. The planned macro form (§20.5) is a **scoped AST macro, not a preprocessor**; it is future work, not part of v1.
 
 ### 20.3 Decisions on the open questions (resolved for v1)
 
@@ -3012,6 +3057,7 @@ These were open in the v0.3 draft; they are now decided, to be implemented in v1
 7. **Function pointers: yes.** `fn(i32) -> i32` is safe and cheap and comes in v1; it is "enough" without closures. *Implemented in the final compiler: `fn(Params) -> Ret` is a structural, `copy`, pointer-sized type. A declared function name coerces to it when the signature matches (`TYPE-01` on mismatch), and calling a function-pointer value checks arity and argument types from the pointer's signature. Function pointers work in locals, fields, arrays and return positions. `fnptr(name)` stays a separate opaque-address intrinsic for thread entries (item 4); harmony-base stays v0.*
 8. **Unsuffixed integer literals: `i32`.** C-like and predictable; aggressive `usize` inference for indices is not done.
 9. **`unchecked` blocks as expressions: no.** Blocks stay statements; the declare-then-assign pattern keeps the "no trailing-expression magic" rule intact.
+10. **User-defined abilities: yes.** A trait-like `abilities` block declares required method signatures and is used as a generic bound. *Implemented in the final compiler (§6.9): satisfaction is structural, checked at monomorphization; `ABLT-01`/`ABLT-02` cover unsatisfied and unknown abilities. harmony-base stays v0.*
 
 ### 20.4 Naming
 
@@ -3019,8 +3065,8 @@ These were open in the v0.3 draft; they are now decided, to be implemented in v1
 
 **The trait-like feature is spelled `abilities`**, and `trait` is **not** a keyword:
 
-- The concept matches how the language already speaks: the v0 bounds (`copy`, `eq`, `ord`) are *abilities a type has*, so a user-defined one is declared in an `abilities` block — `abilities Shape { ... }` — parallel to `methods Type { ... }`, and consumed as the same bound syntax (`<T: Drawable + ord>`).
-- `trait` (like `impl`, `match`, `Box`) becomes a **recognized foreign word**: writing it earns a `NAME-02` translation hint (`trait Shape { ... }` → `abilities Shape { ... }`), never a bare "unknown name".
+- The concept matches how the language already speaks: the v0 bounds (`copy`, `eq`, `ord`) are *abilities a type has*, so a user-defined one is declared in an `abilities` block — `abilities Shape { ... }` — parallel to `methods Type { ... }`, and consumed as the same bound syntax (`<T: Drawable + ord>`). *Implemented in the final compiler (§6.9).*
+- `trait` (like `impl`, `match`, `Box`) becomes a **recognized foreign word**: writing it earns a `NAME-02` translation hint (`trait Shape { ... }` → `abilities Shape { ... }`), never a bare "unknown name". *Implemented in the final compiler's item parser.*
 
 Four keyword reservations are **dropped**: `spawn`, `send`, `try`, and (per the rename above) `trait`. Concurrency in v1 uses ordinary names (e.g. `thread.spawn(...)`-style methods), and early exit on failure is an `else` clause; neither needs a keyword. The reserved-for-the-future list in §4.2 is therefore `abilities` `async` `await` `macro`.
 

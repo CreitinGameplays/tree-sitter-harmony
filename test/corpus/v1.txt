@@ -1056,13 +1056,11 @@ fn main() -> i32 {
 reserved-for-future words still highlight as keywords
 ================================================================================
 
-abilities async await macro
+async await macro
 
 ---
 
 (source_file
-  (item
-    (reserved_keyword))
   (item
     (reserved_keyword))
   (item

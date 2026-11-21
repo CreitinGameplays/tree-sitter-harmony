@@ -51,6 +51,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "abilities_declaration"
+        },
+        {
+          "type": "SYMBOL",
           "name": "extern_function_declaration"
         },
         {
@@ -95,6 +99,10 @@
             },
             {
               "type": "SYMBOL",
+              "name": "abilities_declaration"
+            },
+            {
+              "type": "SYMBOL",
               "name": "extern_function_declaration"
             },
             {
@@ -105,13 +113,107 @@
         }
       ]
     },
-    "reserved_keyword": {
-      "type": "CHOICE",
+    "abilities_declaration": {
+      "type": "SEQ",
       "members": [
         {
           "type": "STRING",
           "value": "abilities"
         },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "{"
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "ability_signature"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "}"
+        }
+      ]
+    },
+    "ability_signature": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "fn"
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "("
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "parameter_list"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": ")"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "->"
+                },
+                {
+                  "type": "FIELD",
+                  "name": "return_type",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "type"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": ";"
+        }
+      ]
+    },
+    "reserved_keyword": {
+      "type": "CHOICE",
+      "members": [
         {
           "type": "STRING",
           "value": "async"
@@ -540,12 +642,8 @@
           "value": "copy"
         },
         {
-          "type": "STRING",
-          "value": "eq"
-        },
-        {
-          "type": "STRING",
-          "value": "ord"
+          "type": "SYMBOL",
+          "name": "identifier"
         }
       ]
     },

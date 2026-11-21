@@ -1,0 +1,264 @@
+================================================================================
+v1: abilities declarations and user-defined bounds
+================================================================================
+
+abilities Drawable {
+    fn area(&self) -> i32;
+    fn label(&self) -> &str;
+}
+
+struct Square { side: i32; }
+
+methods Square {
+    export fn area(&self) -> i32 { return self.side * self.side; }
+    export fn label(&self) -> &str { return "square"; }
+}
+
+fn show<T: Drawable + ord>(item: &T) -> i32 {
+    return item.area();
+}
+
+fn main() -> i32 {
+    let sq = Square { .side = 5 };
+    return show(&sq);
+}
+
+---
+
+(source_file
+  (item
+    (abilities_declaration
+      (identifier)
+      (ability_signature
+        (identifier)
+        (parameter_list
+          (parameter
+            (self_parameter)))
+        (type
+          (type_path
+            (identifier))))
+      (ability_signature
+        (identifier)
+        (parameter_list
+          (parameter
+            (self_parameter)))
+        (type
+          (reference_type
+            (type
+              (type_path
+                (identifier))))))))
+  (item
+    (struct_declaration
+      (identifier)
+      (field_declaration
+        (identifier)
+        (type
+          (type_path
+            (identifier))))))
+  (item
+    (methods_block
+      (type
+        (type_path
+          (identifier)))
+      (method_declaration
+        (function_declaration
+          (identifier)
+          (parameter_list
+            (parameter
+              (self_parameter)))
+          (type
+            (type_path
+              (identifier)))
+          (block
+            (statement
+              (return_statement
+                (expression
+                  (range_expression
+                    (logical_or_expression
+                      (logical_and_expression
+                        (comparison_expression
+                          (bitwise_or_expression
+                            (bitwise_xor_expression
+                              (bitwise_and_expression
+                                (shift_expression
+                                  (additive_expression
+                                    (multiplicative_expression
+                                      (cast_expression
+                                        (unary_expression
+                                          (postfix_expression
+                                            (postfix_expression
+                                              (primary_expression
+                                                (path_expression
+                                                  (identifier))))
+                                            (identifier))))
+                                      (cast_expression
+                                        (unary_expression
+                                          (postfix_expression
+                                            (postfix_expression
+                                              (primary_expression
+                                                (path_expression
+                                                  (identifier))))
+                                            (identifier))))))))))))))))))))
+      (method_declaration
+        (function_declaration
+          (identifier)
+          (parameter_list
+            (parameter
+              (self_parameter)))
+          (type
+            (reference_type
+              (type
+                (type_path
+                  (identifier)))))
+          (block
+            (statement
+              (return_statement
+                (expression
+                  (range_expression
+                    (logical_or_expression
+                      (logical_and_expression
+                        (comparison_expression
+                          (bitwise_or_expression
+                            (bitwise_xor_expression
+                              (bitwise_and_expression
+                                (shift_expression
+                                  (additive_expression
+                                    (multiplicative_expression
+                                      (cast_expression
+                                        (unary_expression
+                                          (postfix_expression
+                                            (primary_expression
+                                              (literal
+                                                (string_literal
+                                                  (string_content)))))))))))))))))))))))))
+  (item
+    (function_declaration
+      (identifier)
+      (generic_parameters
+        (generic_parameter
+          (identifier)
+          (bound
+            (identifier))
+          (bound
+            (identifier))))
+      (parameter_list
+        (parameter
+          (identifier)
+          (type
+            (reference_type
+              (type
+                (type_path
+                  (identifier)))))))
+      (type
+        (type_path
+          (identifier)))
+      (block
+        (statement
+          (return_statement
+            (expression
+              (range_expression
+                (logical_or_expression
+                  (logical_and_expression
+                    (comparison_expression
+                      (bitwise_or_expression
+                        (bitwise_xor_expression
+                          (bitwise_and_expression
+                            (shift_expression
+                              (additive_expression
+                                (multiplicative_expression
+                                  (cast_expression
+                                    (unary_expression
+                                      (postfix_expression
+                                        (postfix_expression
+                                          (postfix_expression
+                                            (primary_expression
+                                              (path_expression
+                                                (identifier))))
+                                          (identifier))
+                                        (argument_list))))))))))))))))))))
+  (item
+    (function_declaration
+      (identifier)
+      (type
+        (type_path
+          (identifier)))
+      (block
+        (statement
+          (let_statement
+            (identifier)
+            (expression
+              (range_expression
+                (logical_or_expression
+                  (logical_and_expression
+                    (comparison_expression
+                      (bitwise_or_expression
+                        (bitwise_xor_expression
+                          (bitwise_and_expression
+                            (shift_expression
+                              (additive_expression
+                                (multiplicative_expression
+                                  (cast_expression
+                                    (unary_expression
+                                      (postfix_expression
+                                        (primary_expression
+                                          (struct_initializer
+                                            (path_expression
+                                              (identifier))
+                                            (field_initializer
+                                              (identifier)
+                                              (expression
+                                                (range_expression
+                                                  (logical_or_expression
+                                                    (logical_and_expression
+                                                      (comparison_expression
+                                                        (bitwise_or_expression
+                                                          (bitwise_xor_expression
+                                                            (bitwise_and_expression
+                                                              (shift_expression
+                                                                (additive_expression
+                                                                  (multiplicative_expression
+                                                                    (cast_expression
+                                                                      (unary_expression
+                                                                        (postfix_expression
+                                                                          (primary_expression
+                                                                            (literal
+                                                                              (integer_literal))))))))))))))))))))))))))))))))))))
+        (statement
+          (return_statement
+            (expression
+              (range_expression
+                (logical_or_expression
+                  (logical_and_expression
+                    (comparison_expression
+                      (bitwise_or_expression
+                        (bitwise_xor_expression
+                          (bitwise_and_expression
+                            (shift_expression
+                              (additive_expression
+                                (multiplicative_expression
+                                  (cast_expression
+                                    (unary_expression
+                                      (postfix_expression
+                                        (postfix_expression
+                                          (primary_expression
+                                            (path_expression
+                                              (identifier))))
+                                        (argument_list
+                                          (expression
+                                            (range_expression
+                                              (logical_or_expression
+                                                (logical_and_expression
+                                                  (comparison_expression
+                                                    (bitwise_or_expression
+                                                      (bitwise_xor_expression
+                                                        (bitwise_and_expression
+                                                          (shift_expression
+                                                            (additive_expression
+                                                              (multiplicative_expression
+                                                                (cast_expression
+                                                                  (unary_expression
+                                                                    (unary_expression
+                                                                      (postfix_expression
+                                                                        (primary_expression
+                                                                          (path_expression
+                                                                            (identifier)))))))))))))))))))))))))))))))))))))))
